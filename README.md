@@ -44,7 +44,7 @@ Download a [faster-whisper model](https://huggingface.co/Systran/faster-whisper-
 ### 3. Ollama (Optional)
 For text correction:
 ```bash
-ollama pull qwen2.5-coder:32b
+ollama pull glm-4.7-flash
 ```
 
 ### 4. Rust Toolchain
@@ -71,9 +71,8 @@ Install from [rustup.rs](https://rustup.rs/)
    language = "ru"
 
    [ollama]
-   base_url = "http://localhost:11434"
-   model = "qwen2.5-coder:32b"
-   enabled = true
+   url = "http://localhost:11434"
+   model = "glm-4.7-flash"
    ```
 
 3. **Build**

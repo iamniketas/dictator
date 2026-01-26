@@ -1,23 +1,19 @@
-[dictator]
-# Main application configuration
+# Dictator Configuration
+# This file is auto-created in %APPDATA%/dictator/config.toml on first run
+# You can edit it manually or it will use defaults below
 
-# Audio settings
-audio_buffer_size = 1024
-audio_sample_rate = 44100
+[hotkey]
+modifiers = ["ctrl", "shift"]
+key = "D"
 
-# Transcription settings
-transcribe_model = "tiny"
-transcribe_language = "en"
+[audio]
+# device = "Microphone Name"  # Optional: specify device, or leave commented for default
+sample_rate = 16000
 
-# Whisper settings
 [whisper]
-model_path = "C:\\Users\\Niketas\\whisper\\fwxxl\\_models\\faster-whisper-large-v2"
+model_path = "C:\\path\\to\\faster-whisper-large-v2"  # Change this to your model path
 language = "ru"
 
-# LLM settings
 [ollama]
-llm_model = "llama3"
-llm_endpoint = "http://localhost:11434"
-
-# UI settings
-ui_refresh_rate = 1000
+url = "http://localhost:11434"
+model = "glm-4.7-flash"  # Fast model for coding and text work

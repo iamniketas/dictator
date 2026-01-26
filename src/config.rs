@@ -59,7 +59,7 @@ impl Default for Config {
             },
             ollama: OllamaConfig {
                 url: "http://localhost:11434".into(),
-                model: "qwen3:30b".into(),
+                model: "glm-4.7-flash".into(),
             },
         }
     }
