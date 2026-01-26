@@ -1,0 +1,30 @@
+# Build artifacts
+target/
+*.rs.bk
+Cargo.lock
+
+# Temporary files
+*.wav
+*.log
+*.pid
+test_whisper_client.py
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+._*
+Thumbs.db
+
+# Project-specific
+.claude/
+EXECUTION_LOG.md
+CURRENT_TASK.md
+LOCAL_MODEL_PROMPT.md
+TASKS.md
+dictator_plan.md
+glm-64k.Modelfile

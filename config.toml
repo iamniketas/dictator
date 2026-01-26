@@ -1,0 +1,23 @@
+[dictator]
+# Main application configuration
+
+# Audio settings
+audio_buffer_size = 1024
+audio_sample_rate = 44100
+
+# Transcription settings
+transcribe_model = "tiny"
+transcribe_language = "en"
+
+# Whisper settings
+[whisper]
+model_path = "C:\\Users\\Niketas\\whisper\\fwxxl\\_models\\faster-whisper-large-v2"
+language = "ru"
+
+# LLM settings
+[ollama]
+llm_model = "llama3"
+llm_endpoint = "http://localhost:11434"
+
+# UI settings
+ui_refresh_rate = 1000

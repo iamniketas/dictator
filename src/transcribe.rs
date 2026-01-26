@@ -1,0 +1,127 @@
+//! Transcription module - Speech to text using faster-whisper HTTP server
+use anyhow::{Context, Result};
+use std::fs::File;
+use std::io::Write as IoWrite;
+use std::path::PathBuf;
+use tracing::{info, warn};
+
+/// Transcribe audio samples to text using faster-whisper HTTP server
+///
+/// # Arguments
+/// * `audio_data` - 16 kHz f32 PCM audio samples
+/// * `language` - Language code (e.g., "ru", "en")
+pub fn transcribe_audio(audio_data: &[f32], language: &str) -> Result<String> {
+    let duration_secs = audio_data.len() as f32 / 16000.0;
+
+    info!(
+        "Transcribing {} samples ({:.1} seconds) with faster-whisper HTTP...",
+        audio_data.len(),
+        duration_secs
+    );
+
+    if audio_data.is_empty() {
+        warn!("Empty audio data, skipping transcription");
+        return Ok(String::new());
+    }
+
+    // Create temporary WAV file
+    let temp_dir = std::env::temp_dir();
+    let audio_path = temp_dir.join("dictator_audio.wav");
+
+    write_wav_file(&audio_path, audio_data)?;
+    info!("Saved audio to temporary file: {:?}", audio_path);
+
+    // Send HTTP request to Whisper server
+    info!("Reading WAV file for upload...");
+    let file_bytes = std::fs::read(&audio_path)
+        .context("Failed to read audio file")?;
+    info!("Read {} bytes from WAV file", file_bytes.len());
+
+    let file_part = reqwest::blocking::multipart::Part::bytes(file_bytes)
+        .file_name("audio.wav")
+        .mime_str("audio/wav")
+        .context("Failed to create file part")?;
+
+    let form = reqwest::blocking::multipart::Form::new()
+        .part("file", file_part)
+        .text("language", language.to_string());
+
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .user_agent("curl/7.68.0")
+        .no_proxy()  // CRITICAL: disable system proxy for localhost
+        .build()
+        .context("Failed to build HTTP client")?;
+
+    info!("Sending transcription request to http://127.0.0.1:5000/transcribe");
+    let response = client
+        .post("http://127.0.0.1:5000/transcribe")
+        .header("Connection", "close")
+        .multipart(form)
+        .send()
+        .context("Failed to send HTTP request to Whisper server")?;
+
+    let status = response.status();
+    info!("Received response with status: {}", status);
+
+    // Clean up temp file
+    let _ = std::fs::remove_file(&audio_path);
+
+    if !status.is_success() {
+        let error_text = response.text().unwrap_or_else(|_| "Unknown error".to_string());
+        warn!("Response body: {}", error_text);
+        anyhow::bail!("Whisper server returned {}: {}", status, error_text);
+    }
+
+    // Parse JSON response
+    let json: serde_json::Value = response
+        .json()
+        .context("Failed to parse JSON response")?;
+
+    let result = json["text"]
+        .as_str()
+        .context("Missing 'text' field in response")?
+        .to_string();
+
+    info!("Transcription complete: \"{}\"", result);
+    Ok(result)
+}
+
+/// Write audio samples to WAV file
+fn write_wav_file(path: &PathBuf, samples: &[f32]) -> Result<()> {
+    let mut file = File::create(path).context("Failed to create WAV file")?;
+
+    // WAV header for 16 kHz mono f32 PCM
+    let sample_rate = 16000u32;
+    let num_channels = 1u16;
+    let bits_per_sample = 32u16; // f32
+    let byte_rate = sample_rate * num_channels as u32 * (bits_per_sample / 8) as u32;
+    let block_align = num_channels * (bits_per_sample / 8);
+    let data_size = (samples.len() * 4) as u32; // 4 bytes per f32
+
+    // RIFF header
+    file.write_all(b"RIFF")?;
+    file.write_all(&(36 + data_size).to_le_bytes())?;
+    file.write_all(b"WAVE")?;
+
+    // fmt chunk
+    file.write_all(b"fmt ")?;
+    file.write_all(&16u32.to_le_bytes())?; // chunk size
+    file.write_all(&3u16.to_le_bytes())?; // audio format (3 = IEEE float)
+    file.write_all(&num_channels.to_le_bytes())?;
+    file.write_all(&sample_rate.to_le_bytes())?;
+    file.write_all(&byte_rate.to_le_bytes())?;
+    file.write_all(&block_align.to_le_bytes())?;
+    file.write_all(&bits_per_sample.to_le_bytes())?;
+
+    // data chunk
+    file.write_all(b"data")?;
+    file.write_all(&data_size.to_le_bytes())?;
+
+    // Write samples
+    for sample in samples {
+        file.write_all(&sample.to_le_bytes())?;
+    }
+
+    Ok(())
+}

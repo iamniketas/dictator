@@ -1,0 +1,54 @@
+[package]
+name = "dictator"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+# Windows API
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Shell",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_Graphics_Gdi",
+    "Win32_System_LibraryLoader",
+] }
+
+# Audio
+cpal = "0.15"
+
+# Async
+tokio = { version = "1.40", features = ["full"] }
+
+# HTTP client for Ollama
+reqwest = { version = "0.12", features = ["json", "stream", "blocking", "multipart"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Channels
+crossbeam-channel = "0.5"
+
+# Error handling
+anyhow = "1.0"
+thiserror = "1.0"
+dirs = "5.0"
+
+[build-dependencies]
+embed-resource = "2.4"
+
+[[bin]]
+name = "dictator"
+path = "src/main.rs"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
