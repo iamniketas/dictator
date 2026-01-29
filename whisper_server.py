@@ -133,4 +133,4 @@ if __name__ == '__main__':
     # Start server
     port = int(os.getenv("WHISPER_PORT", "5000"))
     logger.info(f"Starting Whisper server on port {port}...")
-    app.run(host='127.0.0.1', port=port, debug=False)
+    app.run(host='127.0.0.1', port=port, debug=False, threaded=True)

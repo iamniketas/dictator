@@ -1,9 +1,12 @@
-//! LLM module - Ollama API client for text correction
+// AGENT: kimi | TASK: task_036bea4a178e | TIMESTAMP: 2026-01-29T20:13:24.544516
+// AUTO-GENERATED: Do not edit manually. Delegate changes via orchestrator.
+// SOURCE: http://localhost:8000/task/task_036bea4a178e/report
+
 
 use anyhow::Result;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
-use tracing::info;
+use tracing::{info, error, debug};
 
 /// Ollama API request
 #[derive(Serialize)]
@@ -17,6 +20,7 @@ struct OllamaRequest {
 #[derive(Deserialize)]
 struct OllamaResponse {
     response: String,
+    done: Option<bool>,
 }
 
 /// Ollama client for text correction
@@ -30,7 +34,8 @@ impl OllamaClient {
     /// Create new Ollama client
     pub fn new(base_url: &str, model: &str) -> Self {
         let client = Client::builder()
-            .no_proxy() // Disable system proxy for localhost
+            .no_proxy()
+            .timeout(std::time::Duration::from_secs(120))
             .build()
             .unwrap_or_else(|_| Client::new());
 
@@ -66,15 +71,36 @@ impl OllamaClient {
 
         let url = format!("{}/api/generate", self.base_url);
 
+        debug!("Ollama request URL: {}", url);
+        debug!("Ollama request model: {}", self.model);
+
         let response = self
             .client
             .post(&url)
             .json(&request)
-            .send()?
-            .json::<OllamaResponse>()?;
+            .send()
+            .map_err(|e| {
+                error!("Failed to send request to Ollama: {}", e);
+                anyhow::anyhow!("Ollama request failed: {}", e)
+            })?;
 
-        let corrected = response.response.trim().to_string();
+        let status = response.status();
+        debug!("Ollama response status: {}", status);
+
+        if !status.is_success() {
+            let error_text = response.text().unwrap_or_default();
+            error!("Ollama returned error status {}: {}", status, error_text);
+            return Err(anyhow::anyhow!("Ollama API error: {} - {}", status, error_text));
+        }
+
+        let ollama_response: OllamaResponse = response.json().map_err(|e| {
+            error!("Failed to parse Ollama response: {}", e);
+            anyhow::anyhow!("Failed to parse Ollama response: {}", e)
+        })?;
+
+        let corrected = ollama_response.response.trim().to_string();
         info!("Text corrected: {} chars -> {} chars", raw_text.len(), corrected.len());
+        debug!("Corrected text: {}", corrected);
 
         Ok(corrected)
     }
@@ -82,7 +108,21 @@ impl OllamaClient {
     /// Check if Ollama server is available
     pub fn health_check(&self) -> bool {
         let url = format!("{}/api/tags", self.base_url);
-        self.client.get(&url).send().is_ok()
+        match self.client.get(&url).timeout(std::time::Duration::from_secs(5)).send() {
+            Ok(response) => {
+                let available = response.status().is_success();
+                if available {
+                    debug!("Ollama health check passed");
+                } else {
+                    error!("Ollama health check failed with status: {}", response.status());
+                }
+                available
+            }
+            Err(e) => {
+                error!("Ollama health check failed: {}", e);
+                false
+            }
+        }
     }
 }
 

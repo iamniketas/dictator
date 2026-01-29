@@ -428,7 +428,7 @@ async def run_agent_background(task_id: str, spec_path: str, agent_type: str):
 
 async def run_glm_background(task_id: str, spec: Dict[str, Any]):
     """GLM background execution with detailed logging"""
-    output_file = spec.get('output_file', f'src/generated_{task_id}.rs')
+    output_file = spec.get('output_file') or f'src/generated_{task_id}.rs'
     result_path = Path(output_file)
 
     # Step 1: Context preparation
@@ -528,7 +528,7 @@ async def run_glm_background(task_id: str, spec: Dict[str, Any]):
 
 async def run_kimi_background(task_id: str, spec: Dict[str, Any]):
     """Kimi background execution"""
-    output_file = spec.get('output_file', f'src/generated_{task_id}.rs')
+    output_file = spec.get('output_file') or f'src/generated_{task_id}.rs'
     result_path = Path(output_file)
 
     log_task_event(task_id, "INFO", "CONTEXT", "Preparing context for Kimi K2.5")

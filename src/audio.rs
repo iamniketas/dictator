@@ -14,12 +14,14 @@ enum AudioCommand {
     Start,
     Stop,
     Shutdown,
+    GetBuffer,
 }
 
 /// Audio recorder that captures from microphone
 pub struct AudioRecorder {
     cmd_tx: Sender<AudioCommand>,
     data_rx: Mutex<Receiver<Vec<f32>>>,
+    buffer_rx: Mutex<Receiver<(Vec<f32>, usize)>>,
     is_recording: Arc<AtomicBool>,
     _thread_handle: JoinHandle<()>,
     sample_rate: u32,
@@ -30,16 +32,18 @@ impl AudioRecorder {
     pub fn new() -> Result<Self> {
         let (cmd_tx, cmd_rx) = mpsc::channel();
         let (data_tx, data_rx) = mpsc::channel();
+        let (buffer_tx, buffer_rx) = mpsc::channel();
         let is_recording = Arc::new(AtomicBool::new(false));
         let is_recording_clone = is_recording.clone();
 
         let thread_handle = thread::spawn(move || {
-            audio_thread(cmd_rx, data_tx, is_recording_clone);
+            audio_thread(cmd_rx, data_tx, buffer_tx, is_recording_clone);
         });
 
         Ok(Self {
             cmd_tx,
             data_rx: Mutex::new(data_rx),
+            buffer_rx: Mutex::new(buffer_rx),
             is_recording,
             _thread_handle: thread_handle,
             sample_rate: 16000,
@@ -67,6 +71,19 @@ impl AudioRecorder {
         Ok(data)
     }
 
+    /// Get unprocessed buffer without stopping recording
+    /// Returns (audio_data, start_index) where start_index is the index of first new sample
+    pub fn get_unprocessed_buffer(&self) -> Result<(Vec<f32>, usize)> {
+        if !self.is_recording.load(Ordering::SeqCst) {
+            return Ok((Vec::new(), 0));
+        }
+        self.cmd_tx.send(AudioCommand::GetBuffer)?;
+        
+        // Wait for buffer data
+        let (data, start_idx) = self.buffer_rx.lock().unwrap().recv().unwrap_or_default();
+        Ok((data, start_idx))
+    }
+
     /// Check if currently recording
     pub fn is_recording(&self) -> bool {
         self.is_recording.load(Ordering::SeqCst)
@@ -88,15 +105,18 @@ impl Drop for AudioRecorder {
 fn audio_thread(
     cmd_rx: Receiver<AudioCommand>,
     data_tx: Sender<Vec<f32>>,
+    buffer_tx: Sender<(Vec<f32>, usize)>,
     is_recording: Arc<AtomicBool>,
 ) {
     let buffer = Arc::new(Mutex::new(Vec::<f32>::new()));
     let device_config = Arc::new(Mutex::new((48000u32, 1u16))); // (sample_rate, channels)
+    let last_processed_index = Arc::new(Mutex::new(0usize));
 
     loop {
         match cmd_rx.recv() {
             Ok(AudioCommand::Start) => {
                 buffer.lock().unwrap().clear();
+                *last_processed_index.lock().unwrap() = 0;
 
                 // Get default input device
                 let host = cpal::default_host();
@@ -214,6 +234,34 @@ fn audio_thread(
                             let _ = data_tx.send(mono_16k);
                             break;
                         }
+                        Ok(AudioCommand::GetBuffer) => {
+                            let raw_data = buffer.lock().unwrap().clone();
+                            let last_idx = *last_processed_index.lock().unwrap();
+                            let (sample_rate, channels) = *device_config.lock().unwrap();
+
+                            // Convert to 16 kHz mono
+                            let mono_16k = convert_to_16khz_mono(&raw_data, sample_rate, channels);
+
+                            // Calculate corresponding index in converted data
+                            let converted_last_idx = if sample_rate == 16000 && channels == 1 {
+                                last_idx
+                            } else {
+                                // Approximate index after conversion
+                                let ratio = sample_rate as f32 / 16000.0;
+                                let mono_len = raw_data.len() / channels as usize;
+                                let converted_len = (mono_len as f32 / ratio) as usize;
+                                if raw_data.len() > 0 {
+                                    (last_idx * converted_len) / raw_data.len()
+                                } else {
+                                    0
+                                }
+                            };
+
+                            // Update last processed index to current length
+                            *last_processed_index.lock().unwrap() = raw_data.len();
+
+                            let _ = buffer_tx.send((mono_16k, converted_last_idx));
+                        }
                         Ok(AudioCommand::Shutdown) => {
                             is_recording.store(false, Ordering::SeqCst);
                             return;
@@ -228,6 +276,10 @@ fn audio_thread(
             Ok(AudioCommand::Stop) => {
                 // Not recording, send empty data
                 let _ = data_tx.send(Vec::new());
+            }
+            Ok(AudioCommand::GetBuffer) => {
+                // Not recording, send empty buffer
+                let _ = buffer_tx.send((Vec::new(), 0));
             }
             Ok(AudioCommand::Shutdown) | Err(_) => {
                 return;
@@ -274,3 +326,4 @@ fn convert_to_16khz_mono(data: &[f32], sample_rate: u32, channels: u16) -> Vec<f
 
     output
 }
+

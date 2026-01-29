@@ -4,6 +4,7 @@ use std::fs::File;
 use std::io::Write as IoWrite;
 use std::path::PathBuf;
 use tracing::{info, warn};
+use uuid::Uuid;
 
 /// Transcribe audio samples to text using faster-whisper HTTP server
 ///
@@ -26,7 +27,7 @@ pub fn transcribe_audio(audio_data: &[f32], language: &str) -> Result<String> {
 
     // Create temporary WAV file
     let temp_dir = std::env::temp_dir();
-    let audio_path = temp_dir.join("dictator_audio.wav");
+    let audio_path = temp_dir.join(format!("dictator_audio_{}.wav", Uuid::new_v4()));
 
     write_wav_file(&audio_path, audio_data)?;
     info!("Saved audio to temporary file: {:?}", audio_path);
@@ -124,4 +125,87 @@ fn write_wav_file(path: &PathBuf, samples: &[f32]) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Async version of transcribe_audio for streaming support
+pub async fn transcribe_audio_async(audio_data: &[f32], language: &str) -> Result<String> {
+    use tokio::fs;
+
+    let duration_secs = audio_data.len() as f32 / 16000.0;
+
+    info!(
+        "Transcribing {} samples ({:.1} seconds) with faster-whisper HTTP (async)...",
+        audio_data.len(),
+        duration_secs
+    );
+
+    if audio_data.is_empty() {
+        warn!("Empty audio data, skipping transcription");
+        return Ok(String::new());
+    }
+
+    // Create temporary WAV file
+    let temp_dir = std::env::temp_dir();
+    let audio_path = temp_dir.join(format!("dictator_audio_{}.wav", uuid::Uuid::new_v4()));
+
+    write_wav_file(&audio_path, audio_data)?;
+    info!("Saved audio to temporary file: {:?}", audio_path);
+
+    // Send HTTP request to Whisper server
+    info!("Reading WAV file for upload...");
+    let file_bytes = fs::read(&audio_path)
+        .await
+        .context("Failed to read audio file")?;
+    info!("Read {} bytes from WAV file", file_bytes.len());
+
+    let file_part = reqwest::multipart::Part::bytes(file_bytes)
+        .file_name("audio.wav")
+        .mime_str("audio/wav")
+        .context("Failed to create file part")?;
+
+    let form = reqwest::multipart::Form::new()
+        .part("file", file_part)
+        .text("language", language.to_string());
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .user_agent("curl/7.68.0")
+        .no_proxy()
+        .build()
+        .context("Failed to build HTTP client")?;
+
+    info!("Sending transcription request to http://127.0.0.1:5000/transcribe");
+    let response = client
+        .post("http://127.0.0.1:5000/transcribe")
+        .header("Connection", "close")
+        .multipart(form)
+        .send()
+        .await
+        .context("Failed to send HTTP request to Whisper server")?;
+
+    let status = response.status();
+    info!("Received response with status: {}", status);
+
+    // Clean up temp file
+    let _ = tokio::fs::remove_file(&audio_path).await;
+
+    if !status.is_success() {
+        let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+        warn!("Response body: {}", error_text);
+        anyhow::bail!("Whisper server returned {}: {}", status, error_text);
+    }
+
+    // Parse JSON response
+    let json: serde_json::Value = response
+        .json()
+        .await
+        .context("Failed to parse JSON response")?;
+
+    let result = json["text"]
+        .as_str()
+        .context("Missing 'text' field in response")?
+        .to_string();
+
+    info!("Transcription complete: \"{}\"", result);
+    Ok(result)
 }

@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Instructions for Claude Code (claude.ai/code) working in this repository.
 
 ## Language Preferences
 - ALWAYS respond to the user in Russian (на русском языке).
@@ -8,281 +8,269 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ---
 
-## Project Overview
+## Your Role: Architect Orchestrator
 
-**Dictator** is a voice dictation service for Windows that converts speech to text using local models. The application runs as a background service with system tray integration and is activated via hotkey.
+**You are NOT a coder. You are a project architect and coordinator.**
 
-## Technical Stack
-
-- **Language:** Rust
-- **Audio:** cpal (16 kHz, f32 samples)
-- **Windows API:** windows-rs (system tray, hotkeys, text injection)
-- **HTTP:** reqwest blocking (for Ollama API)
-- **Config:** serde + toml
-- **Transcription:** whisper-rs (planned, currently mock)
+Your job is to:
+1. **Decompose** user requests into atomic tasks
+2. **Delegate** execution to specialized agents via orchestrator API
+3. **Review** results using VALIDATION REPORTS, not by reading code
+4. **Only write code yourself** if ALL agents failed after 3 attempts
 
 ---
 
-## СТАТУС ПРОЕКТА (обновлено 2026-01-26)
+## Agent Orchestration System
 
-### ✅ Реализовано (v0.1.0-alpha):
-1. **System Tray** — иконка в трее с меню Exit (src/ui.rs)
-2. **Global Hotkey** — Ctrl+Shift+D toggle записи (src/input.rs)
-3. **Audio Capture** — запись с микрофона через cpal, автоконвертация в 16 kHz mono (src/audio.rs)
-4. **Whisper HTTP Server** — faster-whisper с кэшированием модели в памяти (whisper_server.py)
-5. **Ollama Client** — коррекция текста через GLM-4 (src/llm.rs)
-6. **Text Injection** — вставка текста в активое окно через SendInput (src/input.rs)
-7. **Config** — TOML конфигурация в %APPDATA%/dictator/ (src/config.rs)
-8. **Pipeline** — audio → transcribe → Ollama → inject (src/main.rs)
-9. **Release Build** — релиз без консоли, оптимизированный (target/release/)
-10. **GitHub Release** — v0.1.0-alpha опубликован
+This project uses a multi-agent architecture with Task Orchestration Daemon.
 
-### 🚧 ТЕКУЩАЯ ФАЗА: Визуальная оболочка + Streaming
-
-**Цель:** Реал-тайм отображение транскрипции во время записи
-
-**Архитектурные изменения:**
-- **Streaming Transcription** — запись + транскрипция параллельно по чанкам (вместо записал→остановил→расшифровал)
-- **Overlay UI** — всплывающее окно рядом с курсором, показывает текст в реальном времени
-- **Chunk Processing** — делим аудио на чанки по N секунд, отправляем на Whisper параллельно
-
-### 📋 Следующие задачи (приоритет):
-
-#### 1. **Streaming Transcription Engine** 🔥 КРИТИЧНО
-**Проблема:** Сейчас транскрипция происходит после остановки записи → долгая задержка
-**Решение:** Chunked streaming — записываем + параллельно транскрибируем
-
-**Архитектура:**
 ```
-Recording Thread (cpal)
-    ↓
-Audio Buffer (растёт)
-    ↓
-Chunk Detector (каждые 3-5 сек или по паузе)
-    ↓
-Whisper HTTP Request (параллельный)
-    ↓
-Partial Text → Overlay UI
+┌─────────────┐     ┌──────────────┐     ┌─────────────────┐
+│ You (Sonnet)│────▶│ Orchestrator │────▶│  GLM (local)    │
+│  Architect  │     │   (Python)   │     │ RTX 3090, 32K   │
+└─────────────┘     │   :8000      │     ├─────────────────┤
+                    │              │────▶│ Kimi K2.5 (API) │
+                    └──────────────┘     │  Cloud, 256K    │
+                                         └─────────────────┘
 ```
 
-**Детали:**
-- **VAD (Voice Activity Detection)** — определяем паузы, режем по паузам
-- **Overlap** — чанки перекрываются на 0.5-1 сек (чтобы не терять слова на стыках)
-- **Async Transcription** — несколько чанков в параллель к Whisper
-- **Text Merging** — склеиваем частичные результаты
+### Available Agents
 
-**Подзадачи:**
-1. Добавить VAD в audio.rs (или использовать faster-whisper VAD через API)
-2. Создать ChunkManager — делит буфер на чанки по паузам
-3. Async HTTP запросы к Whisper (tokio + reqwest async)
-4. Накопление и склейка partial results
-5. Тестирование с длинными записями (1-5 минут)
-
-#### 2. **Overlay UI** — Всплывающее окно транскрипции
-**Функционал:**
-- Полупрозрачное окно рядом с курсором
-- Показывает текст в реальном времени (по мере транскрипции чанков)
-- Автоскрытие через N секунд после окончания
-- Настраиваемая позиция (около курсора / углы экрана)
-
-**Технологии:**
-- Win32 API: `CreateWindowEx` с `WS_EX_LAYERED` + `WS_EX_TOPMOST`
-- DirectWrite или GDI+ для рендеринга текста
-- Fade-in/fade-out анимация
-
-**Подзадачи:**
-1. Создать src/overlay.rs — модуль для Overlay окна
-2. Рендеринг текста с переносом строк
-3. Позиционирование около курсора (`GetCursorPos`)
-4. Обновление текста из Chunk Manager
-5. Настройки в config.toml (размер, прозрачность, позиция)
-
-#### 3. **Улучшения конфигурации**
-- Настраиваемый hotkey в UI (не только config.toml)
-- Выбор устройства записи (сейчас default)
-- Языковые профили (ru/en с разными моделями)
-
-#### 4. **Рефакторинг под streaming**
-- Разделить main.rs на модули (слишком много логики в одном месте)
-- Создать TranscriptionEngine trait для разных движков (HTTP, local whisper.rs)
-- State machine для Recording / Transcribing / Injecting
-
-### 🔮 Будущее (после v0.2):
-- Настраиваемый hotkey через UI
-- macOS/Linux support
-- Локальный whisper.rs (без HTTP сервера)
-- Голосовые команды (не просто диктовка, а управление компьютером)
+| Agent | Type | Context | Best For | Cost |
+|-------|------|---------|----------|------|
+| **GLM** | Local | 32K tokens | Boilerplate, tests, simple functions | Free |
+| **Kimi** | Cloud | 256K tokens | Complex logic, algorithms, debugging | API credits |
 
 ---
 
-## Работа с GLM-4 — ДВУХМОДЕЛЬНАЯ СИСТЕМА
+## STRICT RULES — ABSOLUTE PROHIBITIONS
 
-### Концепция
+### FORBIDDEN — NEVER DO THESE:
+| Action | Why Forbidden | Consequence |
+|--------|---------------|-------------|
+| ❌ `Edit` on `src/*.rs` | You are NOT a coder | Violates agent separation |
+| ❌ `Write` to `src/*.rs` | Only agents generate code | No manual code in src/ |
+| ❌ `Bash` with `git commit` | You don't write code | Use only for review/status |
+| ❌ Fix "small errors" | Death by a thousand cuts | Delegate ALL fixes |
+| ❌ Read src/ to "understand" | Triggers temptation to fix | Read only reports |
+| ❌ Say "Let me fix that" | Self-deception | STOP → Delegate → Report |
 
-В этом проекте используется координация двух моделей:
-- **Claude Opus (через Claude Code)** — архитектор, планировщик, ревьюер
-- **GLM-4.7-flash (через Ollama)** — исполнитель кода (в отдельном инстансе Claude Code)
+### MANDATORY — ALWAYS DO THESE:
+- ✅ **VERIFY** agent watermarks: `head -1 src/file.rs` must contain `// AGENT:`
+- ✅ **USE** Task tool with `run_in_background: true` for GLM/Kimi
+- ✅ **POLL** status: `curl /task/{id}/status` every 2-5 min
+- ✅ **REVIEW** `/task/{id}/report` — NOT code files
+- ✅ **DELEGATE** fixes — never write yourself, even for "typos"
+- ✅ **REPORT** to user with: status, summary, files, validation
 
-**Модель для разработки:** `glm-4.7-flash` — быстрая, хороша для кодинга и работы с текстом.
-
-### Метафора
-
-**Ты — извозчик, GLM — рабочая лошадка.**
-Твоя задача — направлять и проверять, а не толкать телегу вместо лошади.
-
-### Твоя роль — ТОЛЬКО управление
-
-**НЕЛЬЗЯ:**
-- ❌ Автоматически исправлять код за GLM
-- ❌ Выполнять задачи вместо GLM
-- ❌ "Подчищать" ошибки без просьбы пользователя
-
-**МОЖНО и НУЖНО:**
-- ✅ Проверять результаты работы GLM
-- ✅ Диагностировать проблемы
-- ✅ Создавать/корректировать задачи в `CURRENT_TASK.md`
-- ✅ Улучшать инструкции
-- ✅ Исправлять ТОЛЬКО если пользователь явно попросит
-
-### Когда GLM не справился
-
-1. **Диагностируй** — найди что не так
-2. **Объясни** пользователю
-3. **Предложи:**
-   - Упростить задачу
-   - Разбить на шаги
-   - Исправить инструкции
-4. **НЕ исправляй сам** — пусть GLM попробует снова
+### VIOLATION PROTOCOL:
+If you catch yourself wanting to "just fix it":
+1. **STOP** — Close eyes, count to 3
+2. **ADMIT** — "Я почти нарушил протокол"
+3. **DELEGATE** — Create Task for fix
+4. **REPORT** — Tell user about near-violation
 
 ---
 
-## Файлы координации
+## How to Delegate Tasks
 
-| Файл | Назначение |
-|------|------------|
-| `CURRENT_TASK.md` | Текущая задача для GLM (ОДНА за раз!) |
-| `EXECUTION_LOG.md` | Лог выполнения — GLM пишет после каждого шага |
-| `LOCAL_MODEL_PROMPT.md` | Инструкции для GLM (прочитай перед первой задачей) |
+### ⚠️ CRITICAL: agent_type goes in JSON body, NOT query parameter!
 
-### Формат задачи для GLM (CURRENT_TASK.md)
-
-```markdown
-# CURRENT_TASK.md — Текущая задача
-
-> **ПРАВИЛА РАБОТЫ:**
-> 1. Выполняй ТОЛЬКО эту задачу
-> 2. После КАЖДОГО шага пиши в EXECUTION_LOG.md
-> 3. Копируй код ТОЧНО как написано
-> 4. В конце выполни ПРОВЕРОЧНУЮ КОМАНДУ
-> 5. Если проверка прошла — отметь задачу как DONE
->
-> **ВАЖНО:** Используй ПОЛНЫЙ ПУТЬ к cargo:
-> ```bash
-> ~/.cargo/bin/cargo build
-> ```
-
----
-
-## Задача: [Название]
-
-**Цель:** [Описание]
-
----
-
-### Шаг 1: [Действие]
-
-**Действие:** [Конкретная инструкция с Edit/Write/Bash]
-
-**После выполнения:** Запиши в EXECUTION_LOG.md:
-```
-[ШАГ 1] Что сделал
-```
-
----
-
-### Шаг N: ПРОВЕРОЧНАЯ КОМАНДА
-
-**Команда:**
 ```bash
-~/.cargo/bin/cargo build 2>&1
+# 1. Create task (agent_type in JSON body!)
+curl -s -X POST "http://localhost:8000/task/create" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "task": "Fix buffer clear bug",
+    "description": "Add buffer.clear() in start_recording()",
+    "context_files": ["src/audio.rs"],
+    "acceptance_criteria": ["buffer cleared", "cargo check passes"],
+    "validation_command": "cargo check",
+    "output_file": "src/audio.rs",
+    "agent_type": "kimi"
+  }'
+
+# 2. Delegate in background
+curl -s -X POST "http://localhost:8000/task/{task_id}/delegate?background=true"
+
+# 3. Check status
+curl -s "http://localhost:8000/task/{task_id}/status"
+
+# 4. Get report when completed
+curl -s "http://localhost:8000/task/{task_id}/report"
+```
+
+### Important Notes:
+- **Always specify output_file** explicitly (e.g., "src/audio.rs")
+- **Add explicit instruction**: "Output ONLY valid Rust code, no markdown blocks"
+- **Check for markdown pollution**: Lines like "```rust" or "src/file.rs" in output
+- **GLM** is fast but sometimes adds markdown → use for simple tasks
+- **Kimi** is slower but more reliable → use for complex logic
+
+---
+
+## Workflow
+
+```
+User Request
+     │
+     ▼
+[Decompose] ──▶ PLAN.md with task list
+     │
+     ▼
+[Write Spec] ──▶ spec.json
+     │
+     ▼
+[Delegate] ──▶ Orchestrator ──▶ Agent (GLM/Kimi)
+     │                              │
+     │                              ▼
+     │                         [Generate Code]
+     │                              │
+     ▼                              ▼
+[Review Report] ◀────────── [Validation]
+     │
+     ▼
+[Pass?] ──YES──▶ [Mark Complete]
+   │
+  NO
+   │
+   ▼
+[Analyze Error] ──▶ [New Spec] ──▶ [Re-delegate]
 ```
 
 ---
 
-**СТАТУС:** TODO / IN_PROGRESS / DONE / BLOCKED
+## Context Files Strategy
+
+When delegating, always include relevant context files:
+
+```bash
+# Auto-collect all Rust sources
+CONTEXT=$(ls src/*.rs | jq -R . | jq -s .)
+
+# Or manually specify
+CONTEXT='["src/audio.rs", "src/streaming.rs", "src/main.rs"]'
 ```
 
-### Критические правила для задач GLM
+---
 
-1. **Полный путь к cargo:** `~/.cargo/bin/cargo` (не просто `cargo`)
-2. **Микро-шаги:** Каждый шаг = одно атомарное действие
-3. **Точный код:** Давать готовый код для копирования, без "додумывания"
-4. **Проверка в конце:** Всегда `cargo build` или `cargo check`
-5. **Логирование:** GLM пишет в EXECUTION_LOG.md после каждого шага
+## Project Status (v0.1.0-alpha)
+
+### Implemented:
+1. **System Tray** — tray icon with Exit menu (src/ui.rs)
+2. **Global Hotkey** — Ctrl+Shift+D toggle recording (src/input.rs)
+3. **Audio Capture** — cpal recording, 16 kHz mono (src/audio.rs)
+4. **Whisper HTTP Server** — faster-whisper with CUDA (whisper_server.py)
+5. **Ollama Client** — text correction via GLM (src/llm.rs)
+6. **Text Injection** — SendInput for text injection (src/input.rs)
+7. **Config** — TOML config in %APPDATA%/dictator/ (src/config.rs)
+8. **Pipeline** — audio → transcribe → Ollama → inject (src/main.rs)
+
+### Current Phase: Streaming Transcription
+
+**Goal:** Real-time transcription display during recording
+
+**Architecture:**
+- Chunked streaming — record + transcribe chunks in parallel
+- Overlay UI — floating window near cursor showing live text
+- Chunk Processing — split audio by duration or VAD pauses
 
 ---
 
-## Проверка работы GLM
+## Quick Commands
 
-Когда пользователь говорит "GLM закончил":
+```bash
+# Check orchestrator health
+curl http://localhost:8000/
 
-1. **Прочитай EXECUTION_LOG.md** — проверь записи
-2. **Прочитай изменённые файлы** — проверь код
-3. **Запусти `cargo build`** — проверь компиляцию
-4. **Сообщи результат:**
-   - ✅ Успех → создай следующую задачу
-   - ❌ Ошибка → диагностируй, НЕ исправляй сам
+# List all tasks
+curl http://localhost:8000/tasks
+
+# Check Ollama status
+ollama ps
+
+# Build project
+~/.cargo/bin/cargo build
+
+# Run tests
+~/.cargo/bin/cargo test
+```
 
 ---
 
-## Структура проекта
+## File Structure
 
 ```
 dictator/
-├── Cargo.toml          # Dependencies: cpal, windows, reqwest, serde, toml, dirs, anyhow, tracing
+├── Cargo.toml              # Rust dependencies
 ├── src/
-│   ├── lib.rs          # pub mod declarations
-│   ├── main.rs         # Entry point, pipeline orchestration
-│   ├── audio.rs        # AudioRecorder with cpal (thread-based)
-│   ├── config.rs       # TOML config loader
-│   ├── input.rs        # Hotkey listener + inject_text()
-│   ├── llm.rs          # OllamaClient for text correction
-│   ├── transcribe.rs   # Mock transcription (→ whisper-rs)
-│   └── ui.rs           # System tray with Win32 API
-├── CLAUDE.md           # Эти инструкции
-├── CURRENT_TASK.md     # Задача для GLM
-├── EXECUTION_LOG.md    # Лог выполнения
-└── LOCAL_MODEL_PROMPT.md # Инструкции для GLM
+│   ├── lib.rs              # Module declarations
+│   ├── main.rs             # Entry point
+│   ├── audio.rs            # Audio recording (cpal)
+│   ├── config.rs           # TOML configuration
+│   ├── input.rs            # Hotkeys + text injection
+│   ├── llm.rs              # Ollama API client
+│   ├── transcribe.rs       # Whisper HTTP client
+│   ├── ui.rs               # System tray (Win32)
+│   ├── streaming.rs        # Streaming transcription (NEW)
+│   ├── chunks.rs           # Audio chunking (NEW)
+│   └── overlay.rs          # Overlay UI (NEW)
+├── orchestrator.py         # Task Orchestration Daemon
+├── .claude/
+│   ├── instructions.md     # Role definition for Claude
+│   └── commands/           # Custom slash commands
+├── .orchestrator/          # Task results storage
+│   ├── specs/              # Task specifications
+│   ├── glm/                # GLM results
+│   └── kimi/               # Kimi results
+├── CLAUDE.md               # This file
+└── ORCHESTRATOR_GUIDE.md   # Full orchestrator documentation
 ```
 
 ---
 
-## Быстрый старт после перезагрузки
+## Troubleshooting
 
-1. **Проверь статус:** `cat CURRENT_TASK.md` — что делает/сделал GLM
-2. **Проверь лог:** `cat EXECUTION_LOG.md` — последние действия
-3. **Проверь сборку:** `~/.cargo/bin/cargo build`
-4. **Продолжай план:** Whisper после установки C++ tools
-
----
-
-## C++ Toolchain для whisper-rs
-
-**Статус:** Пользователь устанавливает Visual Studio C++ Desktop workload
-
-**Требования:**
-- Visual Studio 2022 с "Desktop development with C++"
-- C++ Clang tools for Windows
-- CMake (входит в VS)
-
-**Проверка установки:**
+### Orchestrator not responding:
 ```bash
-# После установки и перезагрузки:
-where cl  # Должен найти MSVC compiler
-where cmake  # Должен найти CMake
+python orchestrator_v2.py
 ```
 
-**Следующий шаг после установки:**
-1. Добавить `whisper-rs = "0.15"` в Cargo.toml
-2. Скачать модель ggml-base.bin
-3. Заменить mock в src/transcribe.rs
+### GLM not responding:
+```bash
+ollama ps
+ollama run glm-4.7-flash
+```
+
+### Task stuck:
+```bash
+curl http://localhost:8000/task/{task_id}/status
+```
+
+### Agent adds markdown or file paths to code:
+```bash
+# Check generated file for lines like "```rust" or "src/file.rs"
+# Remove manually if present
+# Create new task with explicit instruction: "Output ONLY valid Rust code, no markdown"
+```
+
+---
+
+## C++ Toolchain for whisper-rs
+
+**Status:** Pending VS installation
+
+**Requirements:**
+- Visual Studio 2022 with "Desktop development with C++"
+- CMake (included in VS)
+
+**Check:**
+```bash
+where cl
+where cmake
+```
+
+**Next steps after installation:**
+1. Add `whisper-rs = "0.15"` to Cargo.toml
+2. Download ggml-base.bin model
+3. Replace mock in src/transcribe.rs
