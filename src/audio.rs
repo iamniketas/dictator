@@ -73,10 +73,10 @@ impl AudioRecorder {
 
     /// Get unprocessed buffer without stopping recording
     /// Returns (audio_data, start_index) where start_index is the index of first new sample
+    /// NOTE: Can be called even when not recording to get final buffer
     pub fn get_unprocessed_buffer(&self) -> Result<(Vec<f32>, usize)> {
-        if !self.is_recording.load(Ordering::SeqCst) {
-            return Ok((Vec::new(), 0));
-        }
+        // REMOVED: Check for is_recording - we need to be able to get buffer
+        // even after stop to process final chunks
         self.cmd_tx.send(AudioCommand::GetBuffer)?;
         
         // Wait for buffer data
