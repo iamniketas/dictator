@@ -179,9 +179,9 @@ impl StreamingTranscriber {
                             info!("[STREAMING] Partial: \"{}\"", partial_text);
                             info!("[STREAMING] Accumulated: \"{}\"", accumulated_text);
 
-                            // Send only the current chunk to main thread
+                            // Send full accumulated text to main thread (not just current chunk)
                             if let Err(e) =
-                                event_tx.send(StreamingEvent::PartialText(partial_text.clone()))
+                                event_tx.send(StreamingEvent::PartialText(accumulated_text.clone()))
                             {
                                 error!("[STREAMING] Failed to send event: {}", e);
                             }

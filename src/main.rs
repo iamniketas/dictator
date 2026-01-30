@@ -195,7 +195,7 @@ fn main() -> Result<()> {
                         st.stop();
                         // Wait for streaming to send final text (with timeout)
                         let mut final_text_received = false;
-                        let timeout_duration = std::time::Duration::from_millis(500);
+                        let timeout_duration = std::time::Duration::from_millis(3000);
                         let start_time = std::time::Instant::now();
                         while start_time.elapsed() < timeout_duration {
                             match streaming_rx.recv_timeout(std::time::Duration::from_millis(50)) {
