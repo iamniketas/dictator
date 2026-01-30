@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 use windows::{
-    Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
+    Win32::Foundation::{COLORREF, HWND, POINT, RECT},
     Win32::Graphics::Gdi::*,
     Win32::UI::WindowsAndMessaging::*,
 };
@@ -183,7 +183,7 @@ impl OverlayApp {
                 let brush =
                     CreateSolidBrush(COLORREF((r as u32) << 16 | (g as u32) << 8 | b as u32));
                 FillRect(mem_dc, &rect, brush);
-                DeleteObject(brush);
+                let _ = DeleteObject(brush);
 
                 // Set up fonts
                 if self.font.is_none() || self.rec_font.is_none() {
@@ -208,7 +208,7 @@ impl OverlayApp {
                     let red_brush = CreateSolidBrush(COLORREF(0x0000FF)); // Red in BGR
                     let old_brush = SelectObject(mem_dc, red_brush);
 
-                    Ellipse(
+                    let _ = Ellipse(
                         mem_dc,
                         center_x - radius,
                         center_y - radius,
@@ -217,7 +217,7 @@ impl OverlayApp {
                     );
 
                     SelectObject(mem_dc, old_brush);
-                    DeleteObject(red_brush);
+                    let _ = DeleteObject(red_brush);
 
                     // Draw "REC" text next to circle with smaller font
                     if let Some(rec_font) = self.rec_font {
@@ -264,7 +264,7 @@ impl OverlayApp {
                 }
 
                 // Copy to window
-                BitBlt(
+                let _ = BitBlt(
                     hdc,
                     0,
                     0,
@@ -278,8 +278,8 @@ impl OverlayApp {
 
                 // Cleanup
                 SelectObject(mem_dc, old_bmp);
-                DeleteObject(bmp);
-                DeleteDC(mem_dc);
+                let _ = DeleteObject(bmp);
+                let _ = DeleteDC(mem_dc);
                 ReleaseDC(hwnd, hdc);
             }
         }
@@ -346,11 +346,11 @@ impl ApplicationHandler<OverlayCommand> for OverlayApp {
                 let (_, _, _, a) = state.config.bg_color;
                 let width = state.config.width;
                 let height = state.config.height;
-                SetLayeredWindowAttributes(hwnd, COLORREF(0), a, LWA_ALPHA);
+                let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), a, LWA_ALPHA);
                 drop(state);
 
                 // Set position but DO NOT show
-                SetWindowPos(
+                let _ = SetWindowPos(
                     hwnd,
                     HWND_TOPMOST,
                     0,
@@ -626,6 +626,48 @@ impl OverlayWindow {
     pub fn set_position(&self, x: i32, y: i32) {
         if let Some(proxy) = self.event_loop_proxy.as_ref() {
             let _ = proxy.send_event(OverlayCommand::SetPosition(x, y));
+        }
+    }
+
+    /// Position overlay above the cursor (centered horizontally)
+    pub fn position_near_cursor(&self) {
+        unsafe {
+            let mut cursor_pos = POINT { x: 0, y: 0 };
+            if GetCursorPos(&mut cursor_pos).is_ok() {
+                // Get window dimensions from config
+                let (width, height) = {
+                    let state = self.state.lock().unwrap();
+                    (state.config.width as i32, state.config.height as i32)
+                };
+
+                // Position window ABOVE the cursor, centered horizontally
+                let offset = 10;
+                let mut x = cursor_pos.x - width / 2; // Center horizontally
+                let mut y = cursor_pos.y - height - offset; // Above cursor
+
+                // Get screen dimensions to ensure window stays on screen
+                let screen_width = GetSystemMetrics(SM_CXSCREEN);
+                let screen_height = GetSystemMetrics(SM_CYSCREEN);
+
+                // Clamp X to screen bounds
+                if x < 0 {
+                    x = 10; // Small margin from left edge
+                } else if x + width > screen_width {
+                    x = screen_width - width - 10; // Small margin from right edge
+                }
+
+                // If window would go above the screen, show it BELOW cursor instead
+                if y < 0 {
+                    y = cursor_pos.y + offset;
+                }
+
+                // Ensure Y doesn't go below screen
+                if y + height > screen_height {
+                    y = screen_height - height - 10;
+                }
+
+                self.set_position(x, y);
+            }
         }
     }
 

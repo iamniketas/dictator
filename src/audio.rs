@@ -1,6 +1,6 @@
 //! Audio module - Microphone capture using cpal
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::SampleFormat;
 use std::sync::atomic::{AtomicBool, Ordering};

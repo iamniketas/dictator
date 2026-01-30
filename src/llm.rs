@@ -18,6 +18,7 @@ struct OllamaRequest {
 
 /// Ollama API response
 #[derive(Deserialize)]
+#[allow(dead_code)]
 struct OllamaResponse {
     response: String,
     done: Option<bool>,

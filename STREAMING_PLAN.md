@@ -1,146 +1,160 @@
 # Streaming Transcription — План реализации
 
-## Текущая архитектура (v0.1.0-alpha)
-
-### Pipeline
-1. **RecordStart** (Ctrl+Shift+D) → Запуск аудио потока через cpal
-2. **Audio Buffer** → Накапливается в `Arc<Mutex<Vec<f32>>>` в audio_thread
-3. **RecordStop** → Остановка потока, извлечение буфера
-4. **Transcribe** → Запись буфера во временный WAV файл → HTTP POST к whisper_server.py
-5. **Ollama** → Коррекция текста через GLM-4
-6. **Inject** → Вставка текста в активное окно
-
-### Проблема
-- **Долгая задержка:** Транскрипция происходит только после остановки записи
-- **Блокировка:** HTTP запрос блокирует поток во время транскрипции
-- **Нет обратной связи:** Пользователь не видит результат пока не остановит запись
+> **Статус:** ✅ РЕАЛИЗОВАНО (v0.2.0-alpha, 2026-01-30)
 
 ---
 
-## Новая архитектура (v0.2.0)
+## ✅ Что было реализовано
 
-### Компоненты
-
-#### 1. ChunkManager (новый модуль src/chunks.rs) ✅ ЗАВЕРШЕНО
-- Отслеживает аудио буфер
-- Детектирует паузы через VAD (faster-whisper VAD)
-- Вырезает чанки с overlap (0.5-1 сек)
-- Отправляет чанки на транскрипцию
-- Статус: Реализован в src/chunks.rs с ChunkDetector
-
-#### 2. AsyncTranscriber (обновление src/transcribe.rs) ✅ ЗАВЕРШЕНО
-- Async HTTP клиент (reqwest async + tokio)
-- Параллельная отправка чанков
-- Сбор partial results
-- Обработка ошибок с retry
-- Статус: transcribe_audio_async() реализован в src/transcribe.rs
-
-#### 3. Streaming Module (новый модуль src/streaming.rs) ✅ ЗАВЕРШЕНО
-- StreamingTranscriber — обёртка для параллельной отправки чанков
-- ChunkManager — менеджер чанков
-- StreamingController — контроллер для координации пайплайна
-- StreamingState — состояние машины состояний
-- Статус: Реализован в src/streaming.rs
-
-#### 4. OverlayUI (новый модуль src/overlay.rs) ❌ НЕ РАБОТАЕТ
-- ✅ Код создан (winit + softbuffer)
-- ✅ Компилируется без ошибок
-- ❌ **НЕ ОТОБРАЖАЕТСЯ** — окно не появляется при записи
-- Требует диагностики: логирование, проверка event loop, координаты окна
-
-### Поток данных
+### Архитектура (v0.2.0)
 
 ```
 Recording Thread (cpal)
     ↓
 Audio Buffer (растёт)
     ↓
-ChunkDetector (каждые 3-5 сек или по паузе)
+ChunkDetector (каждые 3 сек)
     ↓
-Whisper HTTP Request (async, несколько параллельно)
+Whisper HTTP Request (в отдельном потоке)
     ↓
 Partial Text → Overlay UI (в реальном времени)
     ↓
 При остановке: финальная склейка + LLM коррекция + Text Injection
 ```
 
-### Вопросы и решения
+### Реализованные компоненты
 
-**Q1:** Как определять границы чанков?
-**A:** Hybrid approach:
-- Fixed time: каждые 3-5 секунд
-- VAD: паузы > 500ms автоматически режут чанк
-- Overlap: чанки перекрываются на 0.5-1 сек для корректного стыка
+#### 1. Streaming Module (`src/streaming.rs`) ✅
+- **Synchronous polling** — упрощённая версия без async/tokio
+- Поток опрашивает аудио буфер каждые 3 секунды
+- Отправляет partial results в main thread через channel
+- Корректная остановка с получением final text
 
-**Q2:** Что делать с overlap между чанками?
-**A:** Whisper с `condition_on_previous_text=True` автоматически использует предыдущий текст как промпт, поэтому overlap не нужен для корректности, но полезен для плавности
+```rust
+pub struct StreamingTranscriber {
+    event_tx: mpsc::Sender<StreamingEvent>,
+    stop_signal: Arc<AtomicBool>,
+    thread_handle: Option<JoinHandle<()>>,
+    language: String,
+}
+```
 
-**Q3:** Как склеивать partial results?
-**A:**
-1. Собираем все сегменты в очередь
-2. Используем `condition_on_previous_text=True` для связности
-3. При остановке — финальная транскрипция всего буфера
-4. LLM корректирует полный текст
+#### 2. Audio Module (`src/audio.rs`) ✅
+- `get_unprocessed_buffer()` — получение буфера без остановки записи
+- Отслеживание последнего обработанного индекса
+- Конвертация в 16kHz mono
+- Корректная очистка буфера при `Start`
 
-### Этапы реализации
+#### 3. Overlay UI (`src/overlay_win32.rs`) ✅
+- Потокобезопасное обновление текста
+- REC индикатор с анимацией (пульсация каждую секунду)
+- Поддержка partial text и final text
+- Win32 GDI рендеринг
 
-**Этап 1:** ChunkManager + VAD
-- Создать src/chunks.rs с ChunkDetector
-- Интегрировать VAD из faster-whisper
-- Тестирование с паузами
-
-**Этап 2:** Async Transcriber
-- Заменить reqwest blocking на reqwest async
-- Добавить tokio runtime
-- Параллельная отправка чанков
-- Обработка partial results
-
-**Этап 3:** Overlay UI
-- Создать src/overlay.rs
-- Win32 окно с прозрачностью
-- Рендеринг текста
-- Позиционирование
-
-**Этап 4:** Интеграция + тестирование
-- Обновить main.rs
-- Объединить компоненты
-- Тестирование с длинными записями
-
-### Риски
-
-1. **Memory usage:** Буфер растёт во время записи
-   - Решение: ограничить буфер (например, 60 секунд)
-
-2. **Network latency:** HTTP запросы могут быть медленными
-   - Решение: использовать connection pooling, timeout
-
-3. **UI responsiveness:** Overlay может блокировать основной поток
-   - Решение: использовать отдельный поток для UI обновлений
-
-4. **Text consistency:** Partial results могут меняться при перетранскрибации
-   - Решение: показывать только подтверждённые сегменты, финальный текст — после остановки
+#### 4. Интеграция в `main.rs` ✅
+- Создание `StreamingTranscriber` при `RecordStart`
+- Обработка `PartialText` и `FinalText` событий
+- Fallback на обычную транскрипцию если стриминг выключен
 
 ---
 
-## Результаты тестирования v0.2.0-alpha (2026-01-29)
+## Конфигурация
 
-### ✅ Работает:
-- Сборка проекта (cargo build --release)
-- Системный трей
-- Hotkey (Ctrl+Shift+D)
-- Аудио запись
-- Whisper транскрипция
-- Вставка текста (первый раз)
+```toml
+[streaming]
+enabled = false        # Включить стриминг
+poll_interval = 3      # Интервал polling (сек)
+```
 
-### ❌ Критические баги:
-1. **Буфер залипает** — вторая запись вставляет текст первой записи
-2. **Ollama не корректирует** — LLM не вызывается или пропущен
-3. **Overlay не показывается** — окно не появляется вообще
+---
 
-### 📋 TODO для следующей сессии:
-1. Добавить диагностическое логирование
-2. Исправить очистку буфера между записями
-3. Восстановить вызов LLM коррекции
-4. Исправить отображение overlay
+## Поток данных
 
-**См. TESTING_REPORT.md для деталей**
+### При старте записи
+```rust
+HotkeyEvent::RecordStart => {
+    accumulated_text.clear();
+    streaming_transcriber = Some(StreamingTranscriber::new(...));
+    streaming_transcriber.start(recorder.clone());
+}
+```
+
+### Во время записи (каждые 3 сек)
+```rust
+// В потоке стриминга:
+1. Получить буфер: recorder.get_unprocessed_buffer()
+2. Отправить в Whisper: transcribe_audio(audio_chunk, language)
+3. Отправить результат: event_tx.send(PartialText(text))
+
+// В main thread:
+StreamingEvent::PartialText(text) => {
+    accumulated_text = text;
+    overlay.update_partial_text(&text);
+}
+```
+
+### При остановке записи
+```rust
+HotkeyEvent::RecordStop => {
+    streaming_transcriber.stop();  // Ждём завершения потока
+    
+    // Получаем final text с таймаутом
+    while timeout_not_reached {
+        match streaming_rx.recv_timeout(...) {
+            FinalText(text) => accumulated_text = text,
+            ...
+        }
+    }
+    
+    // Коррекция через Ollama
+    // Вставка текста
+}
+```
+
+---
+
+## Результаты тестирования
+
+### ✅ Работает
+- Стриминг собирается без ошибок
+- Partial text отображается в overlay
+- Нет залипания буфера между записями
+- Корректная финальная транскрипция
+- LLM коррекция работает
+
+### ⚠️ Известные ограничения
+- Фиксированный интервал 3 сек (не VAD)
+- Нет склейки partial results (показывается только текущий чанк)
+- REC анимация — простое toggle каждую секунду
+
+---
+
+## История изменений
+
+### v0.2.0-alpha (2026-01-30)
+- ✅ Первая рабочая версия стриминга
+- ✅ Синхронный polling вместо async
+- ✅ Интеграция с overlay
+- ✅ Исправлен баг с залипанием буфера
+
+### v0.1.0-alpha (ранее)
+- Базовая архитектура без стриминга
+- Транскрипция только после остановки
+
+---
+
+## Решения
+
+### Почему синхронный polling вместо async?
+- **Простота** — меньше кода, легче отлаживать
+- **Стабильность** — нет проблем с tokio runtime
+- **Достаточность** — 3 секунды приемлемая задержка для диктовки
+
+### Как обрабатывать partial results?
+- Накапливаем текст в `accumulated_text`
+- Показываем только текущий чанк в overlay
+- При остановке используем накопленный текст
+
+---
+
+*Документ обновлён: 2026-01-30*

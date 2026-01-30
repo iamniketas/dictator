@@ -8,6 +8,5 @@ pub mod transcribe;
 pub mod llm;
 pub mod ui;
 pub mod input;
-pub mod overlay;
 pub mod overlay_win32;
 pub mod streaming;

@@ -4,7 +4,7 @@
 //! Uses simple thread::sleep for polling every 3 seconds.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{mpsc, Arc};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 use tracing::{error, info, warn};
@@ -70,25 +70,29 @@ impl StreamingTranscriber {
             let mut last_processed_samples: usize = 0;
             let mut iteration = 0;
 
+            let mut is_final_iteration = false;
+
             loop {
                 iteration += 1;
 
-                // Check if we should stop
-                if stop_signal.load(Ordering::SeqCst) {
-                    info!(
-                        "[STREAMING] Stop signal received, breaking loop at iteration {}",
-                        iteration
-                    );
-                    break;
+                // Sleep for 3 seconds (synchronous, no async)
+                // But skip sleep on final iteration
+                if !is_final_iteration {
+                    thread::sleep(Duration::from_secs(3));
                 }
 
-                // Sleep for 3 seconds (synchronous, no async)
-                thread::sleep(Duration::from_secs(3));
-
-                // Check again after sleep
+                // Check if we should stop (but still process remaining audio)
                 if stop_signal.load(Ordering::SeqCst) {
-                    info!("[STREAMING] Stop signal after sleep, breaking");
-                    break;
+                    if is_final_iteration {
+                        info!("[STREAMING] Final iteration complete, exiting");
+                        break;
+                    }
+                    info!(
+                        "[STREAMING] Stop signal received at iteration {}, processing final chunk...",
+                        iteration
+                    );
+                    is_final_iteration = true;
+                    // Continue to process final chunk without sleeping
                 }
 
                 // Get current buffer
@@ -104,6 +108,9 @@ impl StreamingTranscriber {
                     }
                     Err(e) => {
                         error!("[STREAMING] Failed to get buffer: {}", e);
+                        if is_final_iteration {
+                            break;
+                        }
                         continue;
                     }
                 };
@@ -118,7 +125,8 @@ impl StreamingTranscriber {
                 );
 
                 // Skip if not enough new data (less than 1 second)
-                if new_seconds < 1.0 {
+                // But don't skip on final iteration - process whatever is left
+                if !is_final_iteration && new_seconds < 1.0 {
                     info!(
                         "[STREAMING] Not enough new audio ({:.1}s < 1.0s), skipping",
                         new_seconds
@@ -126,8 +134,11 @@ impl StreamingTranscriber {
                     continue;
                 }
 
-                // Extract new portion
-                let audio_to_process = if start_idx < audio_data.len() {
+                // On final iteration, process all remaining audio regardless of length
+                let audio_to_process = if is_final_iteration {
+                    // Process everything from last_processed_samples to end
+                    &audio_data[last_processed_samples..]
+                } else if start_idx < audio_data.len() {
                     &audio_data[start_idx..]
                 } else {
                     &audio_data[last_processed_samples..]
@@ -135,13 +146,25 @@ impl StreamingTranscriber {
 
                 if audio_to_process.is_empty() {
                     warn!("[STREAMING] Audio to process is empty, skipping");
+                    if is_final_iteration {
+                        break;
+                    }
                     continue;
                 }
 
-                info!(
-                    "[STREAMING] Processing {} samples...",
-                    audio_to_process.len()
-                );
+                // On final iteration, log how much we're processing
+                if is_final_iteration {
+                    info!(
+                        "[STREAMING] FINAL iteration: Processing {} samples ({:.1}s)...",
+                        audio_to_process.len(),
+                        audio_to_process.len() as f32 / 16000.0
+                    );
+                } else {
+                    info!(
+                        "[STREAMING] Processing {} samples...",
+                        audio_to_process.len()
+                    );
+                }
 
                 // Send to Whisper (blocking call, but in separate thread)
                 match transcribe_audio(audio_to_process, &language) {
@@ -178,6 +201,11 @@ impl StreamingTranscriber {
                     "[STREAMING] Updated last_processed_samples to {}",
                     last_processed_samples
                 );
+
+                // If this was final iteration, we're done
+                if is_final_iteration {
+                    break;
+                }
             }
 
             // Send final text
