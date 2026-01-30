@@ -290,6 +290,19 @@ impl OverlayApp {
             window.set_outer_position(winit::dpi::LogicalPosition::new(x, y));
         }
     }
+
+    /// Truncate text to keep only last N lines (for scrolling effect)
+    fn truncate_to_visible_lines(text: &str, max_lines: usize) -> String {
+        if max_lines == 0 {
+            return text.to_string();
+        }
+        let lines: Vec<&str> = text.lines().collect();
+        if lines.len() <= max_lines {
+            return text.to_string();
+        }
+        // Keep only last max_lines
+        lines[lines.len() - max_lines..].join("\n")
+    }
 }
 
 impl ApplicationHandler<OverlayCommand> for OverlayApp {
@@ -492,7 +505,8 @@ impl ApplicationHandler<OverlayCommand> for OverlayApp {
             }
             OverlayCommand::UpdatePartialText(text) => {
                 let mut state = self.state.lock().unwrap();
-                state.text = text;
+                // Keep only last visible lines (scroll effect)
+                state.text = Self::truncate_to_visible_lines(&text, state.config.height as usize / 25);
                 state.visible = true;
                 drop(state);
 

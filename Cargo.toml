@@ -59,12 +59,12 @@ name = "dictator"
 path = "src/main.rs"
 
 [[example]]
-name = "async_test"
-path = "examples/async_test.rs"
-
-[[example]]
 name = "test_overlay"
 path = "examples/test_overlay.rs"
+
+[[example]]
+name = "benchmark"
+path = "examples/benchmark.rs"
 
 [profile.release]
 opt-level = 3
