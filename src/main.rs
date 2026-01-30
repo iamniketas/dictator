@@ -42,6 +42,10 @@ fn main() -> Result<()> {
     let config = Config::load()?;
     info!("Config loaded, hotkey: {:?}", config.hotkey);
 
+    // Initialize streaming state from config
+    ui::set_streaming_enabled(config.streaming.enabled);
+    info!("[MAIN] Initial streaming state: {}", ui::is_streaming_enabled());
+
     // Create Ollama client
     let ollama = Arc::new(OllamaClient::new(&config.ollama.url, &config.ollama.model));
 
@@ -63,10 +67,8 @@ fn main() -> Result<()> {
     let (tx, rx) = mpsc::channel();
     let _hotkey_handle = input::start_hotkey_listener(tx);
 
-    // Create streaming channel (if streaming is enabled)
+    // Create streaming channel
     let (streaming_tx, streaming_rx) = std::sync::mpsc::channel::<StreamingEvent>();
-    let streaming_enabled = config.streaming.enabled;
-    info!("[MAIN] Streaming enabled: {}", streaming_enabled);
 
     // Handle hotkey events in a separate thread
     let recorder_clone = recorder.clone();
@@ -154,8 +156,8 @@ fn main() -> Result<()> {
                     } else {
                         info!("[MAIN] Recording started successfully!");
 
-                        // Start streaming if enabled
-                        if config_clone.streaming.enabled {
+                        // Start streaming if enabled (from tray menu)
+                        if ui::is_streaming_enabled() {
                             info!("[MAIN] Starting streaming transcription...");
                             accumulated_text.clear();
                             streaming_transcriber = Some(StreamingTranscriber::new(

@@ -12,14 +12,27 @@ use windows::Win32::UI::Shell::{
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DispatchMessageW,
     GetCursorPos, GetMessageW, LoadIconW, PostQuitMessage, RegisterClassW, SetForegroundWindow,
-    TrackPopupMenu, CS_HREDRAW, CS_VREDRAW, IDI_APPLICATION, MF_STRING, MSG, TPM_BOTTOMALIGN,
-    TPM_LEFTALIGN, WM_COMMAND, WM_DESTROY, WM_RBUTTONUP, WM_USER, WNDCLASSW, WS_OVERLAPPEDWINDOW,
+    TrackPopupMenu, CS_HREDRAW, CS_VREDRAW, IDI_APPLICATION, MF_CHECKED, MF_SEPARATOR, MF_STRING,
+    MF_UNCHECKED, MSG, TPM_BOTTOMALIGN, TPM_LEFTALIGN, WM_COMMAND, WM_DESTROY, WM_RBUTTONUP,
+    WM_USER, WNDCLASSW, WS_OVERLAPPEDWINDOW,
 };
 
 const WM_TRAYICON: u32 = WM_USER + 1;
 const ID_EXIT: u16 = 1001;
+const ID_STREAMING: u16 = 1002;
 
 static SHOULD_EXIT: AtomicBool = AtomicBool::new(false);
+static STREAMING_ENABLED: AtomicBool = AtomicBool::new(false);
+
+/// Check if streaming is enabled
+pub fn is_streaming_enabled() -> bool {
+    STREAMING_ENABLED.load(Ordering::SeqCst)
+}
+
+/// Set streaming enabled state
+pub fn set_streaming_enabled(enabled: bool) {
+    STREAMING_ENABLED.store(enabled, Ordering::SeqCst);
+}
 
 /// Check if application should exit
 pub fn should_exit() -> bool {
@@ -117,6 +130,12 @@ unsafe extern "system" fn window_proc(
                 if cmd == ID_EXIT {
                     SHOULD_EXIT.store(true, Ordering::SeqCst);
                     PostQuitMessage(0);
+                } else if cmd == ID_STREAMING {
+                    // Toggle streaming state
+                    let new_state = !STREAMING_ENABLED.load(Ordering::SeqCst);
+                    STREAMING_ENABLED.store(new_state, Ordering::SeqCst);
+                    // Note: tracing logging requires setup in main, using eprintln for now
+                    eprintln!("[TRAY] Streaming {}", if new_state { "enabled" } else { "disabled" });
                 }
                 LRESULT(0)
             }
@@ -133,6 +152,18 @@ unsafe fn show_context_menu(hwnd: HWND) {
     // Rust 2024 requires explicit unsafe blocks inside unsafe fn
     unsafe {
         if let Ok(menu) = CreatePopupMenu() {
+            // Add Streaming toggle with checkmark
+            let streaming_flag = if STREAMING_ENABLED.load(Ordering::SeqCst) {
+                MF_CHECKED
+            } else {
+                MF_UNCHECKED
+            };
+            let _ = AppendMenuW(menu, streaming_flag | MF_STRING, ID_STREAMING as usize, w!("Стриминг"));
+            
+            // Separator
+            let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
+            
+            // Exit
             let _ = AppendMenuW(menu, MF_STRING, ID_EXIT as usize, w!("Exit"));
 
             let mut pt = Default::default();
