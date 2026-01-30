@@ -49,6 +49,7 @@ pub struct WhisperConfig {
 /// Ollama configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OllamaConfig {
+    pub enabled: bool,
     pub url: String,
     pub model: String,
 }
@@ -69,6 +70,7 @@ impl Default for Config {
                 language: "ru".into(),
             },
             ollama: OllamaConfig {
+                enabled: false, // Disabled by default for speed
                 url: "http://localhost:11434".into(),
                 model: "glm-4.7-flash".into(),
             },

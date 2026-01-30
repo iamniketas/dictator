@@ -45,11 +45,11 @@ fn main() -> Result<()> {
     // Create Ollama client
     let ollama = Arc::new(OllamaClient::new(&config.ollama.url, &config.ollama.model));
 
-    // Check Ollama availability
-    if ollama.health_check() {
-        info!("Ollama server is available at {}", config.ollama.url);
+    // Log Ollama status
+    if config.ollama.enabled {
+        info!("Ollama correction enabled ({})", config.ollama.url);
     } else {
-        info!("Warning: Ollama server not available. Text correction will be skipped.");
+        info!("Ollama correction disabled for speed");
     }
 
     // Create shared audio recorder
@@ -263,11 +263,9 @@ fn main() -> Result<()> {
                         continue;
                     }
 
-                    // Show correction status
-                    overlay_clone.show("Исправление...");
-
-                    // Correct text with Ollama (if available)
-                    let final_text = if ollama_clone.health_check() {
+                    // Correct text with Ollama (if enabled in config)
+                    let final_text = if config_clone.ollama.enabled {
+                        overlay_clone.show("Исправление...");
                         match ollama_clone.correct_text(&raw_text) {
                             Ok(corrected) => corrected,
                             Err(e) => {
@@ -276,7 +274,7 @@ fn main() -> Result<()> {
                             }
                         }
                     } else {
-                        info!("Ollama not available, using raw transcription");
+                        info!("Ollama disabled in config, using raw transcription");
                         raw_text
                     };
 
