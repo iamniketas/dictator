@@ -245,10 +245,17 @@ impl OverlayApp {
                     SelectObject(mem_dc, main_font);
                 }
 
-                // Draw main text
+                // Draw main text - only last visible lines
                 let text_str: &str = &text;
                 if !text_str.is_empty() {
-                    let mut text_utf16: Vec<u16> = text_str.encode_utf16().collect();
+                    // Calculate how many lines fit (approx 4 lines for 120px height with 24px font)
+                    const MAX_LINES: usize = 4;
+                    const MAX_CHARS_PER_LINE: usize = 60;
+                    
+                    // Wrap text and keep only last lines
+                    let visible_text = Self::get_last_lines(text_str, MAX_LINES, MAX_CHARS_PER_LINE);
+                    
+                    let mut text_utf16: Vec<u16> = visible_text.encode_utf16().collect();
                     let mut text_rect = RECT {
                         left: if is_recording { 85 } else { 20 },
                         top: 10,
@@ -259,7 +266,7 @@ impl OverlayApp {
                         mem_dc,
                         &mut text_utf16,
                         &mut text_rect,
-                        DT_LEFT | DT_BOTTOM | DT_WORDBREAK,
+                        DT_LEFT | DT_TOP | DT_WORDBREAK,
                     );
                 }
 
@@ -291,17 +298,41 @@ impl OverlayApp {
         }
     }
 
-    /// Truncate text to keep only last N lines (for scrolling effect)
-    fn truncate_to_visible_lines(text: &str, max_lines: usize) -> String {
-        if max_lines == 0 {
+    /// Get last N lines of text, wrapping long lines to fit width
+    fn get_last_lines(text: &str, max_lines: usize, max_chars: usize) -> String {
+        if text.is_empty() || max_lines == 0 {
             return text.to_string();
         }
-        let lines: Vec<&str> = text.lines().collect();
-        if lines.len() <= max_lines {
-            return text.to_string();
+        
+        // Split text into words and wrap to lines
+        let words: Vec<&str> = text.split_whitespace().collect();
+        let mut lines: Vec<String> = Vec::new();
+        let mut current_line = String::new();
+        
+        for word in words {
+            if current_line.is_empty() {
+                current_line = word.to_string();
+            } else if current_line.len() + 1 + word.len() <= max_chars {
+                current_line.push(' ');
+                current_line.push_str(word);
+            } else {
+                // Line full, start new one
+                lines.push(current_line);
+                current_line = word.to_string();
+            }
         }
+        
+        // Don't forget last line
+        if !current_line.is_empty() {
+            lines.push(current_line);
+        }
+        
         // Keep only last max_lines
-        lines[lines.len() - max_lines..].join("\n")
+        if lines.len() <= max_lines {
+            lines.join("\n")
+        } else {
+            lines[lines.len() - max_lines..].join("\n")
+        }
     }
 }
 
