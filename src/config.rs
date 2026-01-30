@@ -49,6 +49,7 @@ pub struct WhisperConfig {
 /// Ollama configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OllamaConfig {
+    #[serde(default)]
     pub enabled: bool,
     pub url: String,
     pub model: String,
