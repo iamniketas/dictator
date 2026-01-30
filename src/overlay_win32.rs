@@ -248,9 +248,9 @@ impl OverlayApp {
                 // Draw main text - only last visible lines
                 let text_str: &str = &text;
                 if !text_str.is_empty() {
-                    // Calculate how many lines fit (approx 4 lines for 120px height with 24px font)
-                    const MAX_LINES: usize = 4;
-                    const MAX_CHARS_PER_LINE: usize = 60;
+                    // Calculate how many lines fit (5 lines fit in 120px height with 24px font)
+                    const MAX_LINES: usize = 5;
+                    const MAX_CHARS_PER_LINE: usize = 75;
                     
                     // Wrap text and keep only last lines
                     let visible_text = Self::get_last_lines(text_str, MAX_LINES, MAX_CHARS_PER_LINE);
