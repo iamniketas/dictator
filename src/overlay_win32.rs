@@ -259,7 +259,7 @@ impl OverlayApp {
                         mem_dc,
                         &mut text_utf16,
                         &mut text_rect,
-                        DT_LEFT | DT_TOP | DT_WORDBREAK,
+                        DT_LEFT | DT_BOTTOM | DT_WORDBREAK,
                     );
                 }
 
@@ -505,8 +505,8 @@ impl ApplicationHandler<OverlayCommand> for OverlayApp {
             }
             OverlayCommand::UpdatePartialText(text) => {
                 let mut state = self.state.lock().unwrap();
-                // Keep only last visible lines (scroll effect)
-                state.text = Self::truncate_to_visible_lines(&text, state.config.height as usize / 25);
+                // Store full text - DT_BOTTOM will align to bottom and clip top
+                state.text = text;
                 state.visible = true;
                 drop(state);
 
