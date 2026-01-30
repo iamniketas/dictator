@@ -1,12 +1,3 @@
-# AGENT: kimi | TASK: task_d0c0a596560e | TIMESTAMP: 2026-01-29T18:16:23.058280
-# AUTO-GENERATED: Do not edit manually. Delegate changes via orchestrator.
-# SOURCE: http://localhost:8000/task/task_d0c0a596560e/report
-
-
-# AGENT: kimi | TASK: task_8d07185ce7a6 | TIMESTAMP: 2026-01-29T15:16:33.251856
-# AUTO-GENERATED: Do not edit manually. Delegate changes via orchestrator.
-# SOURCE: http://localhost:8000/task/task_8d07185ce7a6/report
-
 [package]
 name = "dictator"
 version = "0.1.0"
@@ -51,6 +42,9 @@ anyhow = "1.0"
 thiserror = "1.0"
 dirs = "5.0"
 
+# Clipboard
+clipboard-win = "4.5"
+
 # Overlay
 winit = "0.30"
 softbuffer = "0.4"
@@ -66,6 +60,10 @@ path = "src/main.rs"
 [[example]]
 name = "async_test"
 path = "examples/async_test.rs"
+
+[[example]]
+name = "test_overlay"
+path = "examples/test_overlay.rs"
 
 [profile.release]
 opt-level = 3

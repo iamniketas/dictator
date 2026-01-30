@@ -27,4 +27,8 @@ CURRENT_TASK.md
 LOCAL_MODEL_PROMPT.md
 TASKS.md
 dictator_plan.md
-glm-64k.Modelfile
+glm-64k.ModelfileNUL
+orchestrator.db
+__pycache__/
+.orchestrator/
+examples/
