@@ -29,9 +29,9 @@ pub struct OverlayConfig {
 impl Default for OverlayConfig {
     fn default() -> Self {
         Self {
-            width: 500,
-            height: 80,
-            font_size: 28,
+            width: 800,
+            height: 120,
+            font_size: 24,
             text_color: (240, 240, 240), // Off-white text
             bg_color: (45, 45, 48, 235), // Dark gray background
         }
@@ -251,15 +251,15 @@ impl OverlayApp {
                     let mut text_utf16: Vec<u16> = text_str.encode_utf16().collect();
                     let mut text_rect = RECT {
                         left: if is_recording { 85 } else { 20 },
-                        top: 0,
+                        top: 10,
                         right: config.width as i32 - 20,
-                        bottom: config.height as i32,
+                        bottom: config.height as i32 - 10,
                     };
                     DrawTextW(
                         mem_dc,
                         &mut text_utf16,
                         &mut text_rect,
-                        DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS,
+                        DT_LEFT | DT_TOP | DT_WORDBREAK,
                     );
                 }
 
