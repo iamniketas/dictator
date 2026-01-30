@@ -177,21 +177,10 @@ fn main() -> Result<()> {
                     info!("[MAIN] ===> PROCESSING RecordStop");
                     is_recording = false;
 
-                    info!("[MAIN] Calling recorder.stop_recording()...");
-                    let audio_data = match recorder_clone.stop_recording() {
-                        Ok(data) => {
-                            info!("[MAIN] Got {} samples of audio", data.len());
-                            data
-                        }
-                        Err(e) => {
-                            error!("[MAIN] FAILED to stop recording: {}", e);
-                            continue;
-                        }
-                    };
-
-                    // Stop streaming if active and wait for final text
+                    // CRITICAL: Stop streaming FIRST while recording is still active
+                    // This allows streaming to read the final buffer before it's cleared
                     if let Some(mut st) = streaming_transcriber.take() {
-                        info!("[MAIN] Stopping streaming transcription...");
+                        info!("[MAIN] Stopping streaming transcription (while recorder still active)...");
                         st.stop();
                         // Wait for streaming to send final text (with timeout)
                         let mut final_text_received = false;
@@ -226,6 +215,19 @@ fn main() -> Result<()> {
                             info!("[MAIN] No final text received from streaming, using accumulated text");
                         }
                     }
+
+                    // NOW stop recording (after streaming has processed final buffer)
+                    info!("[MAIN] Calling recorder.stop_recording()...");
+                    let audio_data = match recorder_clone.stop_recording() {
+                        Ok(data) => {
+                            info!("[MAIN] Got {} samples of audio", data.len());
+                            data
+                        }
+                        Err(e) => {
+                            error!("[MAIN] FAILED to stop recording: {}", e);
+                            continue;
+                        }
+                    };
 
                     if audio_data.is_empty() {
                         info!("No audio recorded");
