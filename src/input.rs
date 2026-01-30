@@ -74,17 +74,43 @@ pub fn start_hotkey_listener(tx: mpsc::Sender<HotkeyEvent>) -> thread::JoinHandl
 
             while GetMessageW(&mut msg, None, 0, 0).into() {
                 if msg.message == WM_HOTKEY && msg.wParam.0 as i32 == HOTKEY_ID {
-                    toggle_state = !toggle_state;
+                    info!(
+                        "[HOTKEY] WM_HOTKEY received! Current toggle_state: {}",
+                        toggle_state
+                    );
+
+                    // Calculate next state BEFORE toggling
+                    let next_state = !toggle_state;
+                    info!("[HOTKEY] Will toggle to: {}", next_state);
 
                     // Save the currently focused window handle
                     let hwnd = GetForegroundWindow().0 as isize;
+                    info!("[HOTKEY] Current foreground window: {}", hwnd);
 
-                    if toggle_state {
-                        info!("Hotkey pressed! Starting recording...");
-                        let _ = tx.send(HotkeyEvent::RecordStart { hwnd });
+                    // Send event based on NEXT state
+                    let send_result = if next_state {
+                        info!("[HOTKEY] ===> SENDING RecordStart event...");
+                        tx.send(HotkeyEvent::RecordStart { hwnd })
                     } else {
-                        info!("Hotkey pressed! Stopping recording...");
-                        let _ = tx.send(HotkeyEvent::RecordStop { hwnd });
+                        info!("[HOTKEY] ===> SENDING RecordStop event...");
+                        tx.send(HotkeyEvent::RecordStop { hwnd })
+                    };
+
+                    // Only toggle if send succeeded
+                    match send_result {
+                        Ok(_) => {
+                            toggle_state = next_state;
+                            info!(
+                                "[HOTKEY] Event sent successfully, toggle_state is now: {}",
+                                toggle_state
+                            );
+                        }
+                        Err(e) => {
+                            error!(
+                                "[HOTKEY] FAILED to send event: {}! toggle_state remains: {}",
+                                e, toggle_state
+                            );
+                        }
                     }
                 }
             }

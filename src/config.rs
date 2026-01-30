@@ -12,6 +12,17 @@ pub struct Config {
     pub audio: AudioConfig,
     pub whisper: WhisperConfig,
     pub ollama: OllamaConfig,
+    #[serde(default)]
+    pub streaming: StreamingConfig,
+}
+
+/// Streaming configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StreamingConfig {
+    /// Enable real-time streaming transcription (default: false)
+    pub enabled: bool,
+    /// Poll interval in seconds (default: 3)
+    pub poll_interval: u64,
 }
 
 /// Hotkey configuration
@@ -61,6 +72,19 @@ impl Default for Config {
                 url: "http://localhost:11434".into(),
                 model: "glm-4.7-flash".into(),
             },
+            streaming: StreamingConfig {
+                enabled: false, // Disabled by default - safer
+                poll_interval: 3,
+            },
+        }
+    }
+}
+
+impl Default for StreamingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            poll_interval: 3,
         }
     }
 }

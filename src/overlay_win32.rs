@@ -60,6 +60,7 @@ enum OverlayCommand {
     Show(String),
     Hide,
     SetRecording(bool),
+    UpdatePartialText(String),
     AnimationTick,
     SetPosition(i32, i32),
     Shutdown,
@@ -224,8 +225,8 @@ impl OverlayApp {
                     }
                     let mut rec_text: Vec<u16> = "REC".encode_utf16().collect();
                     let mut rec_rect = RECT {
-                        left: 48, // Closer to the dot
-                        top: -1,  // Slightly up for better centering
+                        left: 48,
+                        top: 0,
                         right: config.width as i32,
                         bottom: config.height as i32,
                     };
@@ -489,6 +490,16 @@ impl ApplicationHandler<OverlayCommand> for OverlayApp {
                 let mut state = self.state.lock().unwrap();
                 state.position = (x, y);
             }
+            OverlayCommand::UpdatePartialText(text) => {
+                let mut state = self.state.lock().unwrap();
+                state.text = text;
+                state.visible = true;
+                drop(state);
+
+                if let Some(window) = self.window.as_ref() {
+                    window.request_redraw();
+                }
+            }
             OverlayCommand::Shutdown => {
                 event_loop.exit();
             }
@@ -615,6 +626,13 @@ impl OverlayWindow {
     pub fn set_position(&self, x: i32, y: i32) {
         if let Some(proxy) = self.event_loop_proxy.as_ref() {
             let _ = proxy.send_event(OverlayCommand::SetPosition(x, y));
+        }
+    }
+
+    /// Update partial text during streaming transcription
+    pub fn update_partial_text(&self, text: &str) {
+        if let Some(proxy) = self.event_loop_proxy.as_ref() {
+            let _ = proxy.send_event(OverlayCommand::UpdatePartialText(text.to_string()));
         }
     }
 }
