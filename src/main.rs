@@ -4,6 +4,7 @@
 use anyhow::Result;
 use std::sync::mpsc;
 use std::sync::Arc;
+use std::time::Duration;
 use tracing::{error, info, warn};
 
 use dictator::audio::AudioRecorder;
@@ -14,6 +15,7 @@ use dictator::overlay_win32::{OverlayConfig, OverlayWindow};
 use dictator::streaming::{StreamingEvent, StreamingTranscriber};
 use dictator::transcribe;
 use dictator::ui;
+use dictator::whisper_server::WhisperServerManager;
 
 fn main() -> Result<()> {
     // Initialize logging to file
@@ -42,8 +44,8 @@ fn main() -> Result<()> {
     let config = Config::load()?;
     info!("Config loaded, hotkey: {:?}", config.hotkey);
 
-    // Initialize streaming state from config
-    ui::set_streaming_enabled(config.streaming.enabled);
+    // Always start in full transcription mode (streaming disabled by default).
+    ui::set_streaming_enabled(false);
     info!("[MAIN] Initial streaming state: {}", ui::is_streaming_enabled());
 
     // Create Ollama client
@@ -82,11 +84,18 @@ fn main() -> Result<()> {
         let mut is_recording = false;
         let mut streaming_transcriber: Option<StreamingTranscriber> = None;
         let mut accumulated_text = String::new();
+        let mut whisper_manager = WhisperServerManager::new(
+            config_clone
+                .whisper
+                .model_path
+                .to_string_lossy()
+                .to_string(),
+        );
 
         info!("[MAIN] Event handler thread started, waiting for hotkey events...");
 
         loop {
-            info!(
+            tracing::debug!(
                 "[MAIN] Waiting for next event... (is_recording: {})",
                 is_recording
             );
@@ -145,8 +154,10 @@ fn main() -> Result<()> {
                     saved_hwnd = Some(hwnd);
                     info!("[MAIN] Saved focus window handle: {}", hwnd);
 
+                    overlay_clone.position_near_cursor();
                     info!("[MAIN] Calling overlay.set_recording(true)...");
                     overlay_clone.set_recording(true);
+                    overlay_clone.update_partial_text("Preparing transcription...");
 
                     info!("[MAIN] Calling recorder.start_recording()...");
                     if let Err(e) = recorder_clone.start_recording() {
@@ -154,7 +165,14 @@ fn main() -> Result<()> {
                         is_recording = false;
                         overlay_clone.hide();
                     } else {
-                        info!("[MAIN] Recording started successfully!");
+                        info!("[MAIN] Recording started");
+                        overlay_clone.update_partial_text("Recording...");
+
+                        if let Err(e) = whisper_manager.ensure_running(Duration::from_secs(30)) {
+                            warn!("[MAIN] Whisper server warmup failed: {}", e);
+                            overlay_clone
+                                .update_partial_text("Recording... (server is not ready)");
+                        }
 
                         // Start streaming if enabled (from tray menu)
                         if ui::is_streaming_enabled() {
@@ -178,6 +196,7 @@ fn main() -> Result<()> {
 
                     info!("[MAIN] ===> PROCESSING RecordStop");
                     is_recording = false;
+                    overlay_clone.set_recording(false);
 
                     // CRITICAL: Stop streaming FIRST while recording is still active
                     // This allows streaming to read the final buffer before it's cleared
@@ -227,6 +246,7 @@ fn main() -> Result<()> {
                         }
                         Err(e) => {
                             error!("[MAIN] FAILED to stop recording: {}", e);
+                            whisper_manager.stop_if_owned();
                             continue;
                         }
                     };
@@ -234,19 +254,29 @@ fn main() -> Result<()> {
                     if audio_data.is_empty() {
                         info!("No audio recorded");
                         overlay_clone.hide();
+                        whisper_manager.stop_if_owned();
                         continue;
                     }
 
-                    // Determine raw text: use streaming results if available, otherwise transcribe full audio
+                                        // Determine raw text: use streaming results if available, otherwise transcribe full audio
                     let raw_text = if !accumulated_text.is_empty() {
                         info!(
-                            "[MAIN] Using streaming accumulated text: \"{}\"",
-                            accumulated_text
+                            "[MAIN] Using streaming text ({} chars)",
+                            accumulated_text.len()
                         );
                         accumulated_text.clone()
                     } else {
+                        if let Err(e) = whisper_manager.ensure_running(Duration::from_secs(30)) {
+                            error!("[MAIN] Failed to start Whisper server: {}", e);
+                            overlay_clone.show("Whisper server startup error");
+                            std::thread::sleep(Duration::from_secs(2));
+                            overlay_clone.hide();
+                            whisper_manager.stop_if_owned();
+                            continue;
+                        }
+
                         // Show transcription status
-                        overlay_clone.show("Расшифровка...");
+                        overlay_clone.show("Transcribing...");
 
                         // Transcribe audio
                         match transcribe::transcribe_audio(&audio_data, &config.whisper.language) {
@@ -254,6 +284,7 @@ fn main() -> Result<()> {
                             Err(e) => {
                                 error!("Transcription error: {}", e);
                                 overlay_clone.hide();
+                                whisper_manager.stop_if_owned();
                                 continue;
                             }
                         }
@@ -262,12 +293,13 @@ fn main() -> Result<()> {
                     if raw_text.is_empty() {
                         info!("No text transcribed");
                         overlay_clone.hide();
+                        whisper_manager.stop_if_owned();
                         continue;
                     }
 
                     // Correct text with Ollama (if enabled in config)
                     let final_text = if config_clone.ollama.enabled {
-                        overlay_clone.show("Исправление...");
+                        overlay_clone.show("Correcting...");
                         match ollama_clone.correct_text(&raw_text) {
                             Ok(corrected) => corrected,
                             Err(e) => {
@@ -311,6 +343,7 @@ fn main() -> Result<()> {
                     // Hide overlay after delay
                     std::thread::sleep(std::time::Duration::from_secs(2));
                     overlay_clone.hide();
+                    whisper_manager.stop_if_owned();
 
                     // Reset accumulated text for next recording
                     accumulated_text.clear();
@@ -344,3 +377,5 @@ fn main() -> Result<()> {
     info!("Dictator shutting down");
     Ok(())
 }
+
+

@@ -487,6 +487,20 @@ impl ApplicationHandler<OverlayCommand> for OverlayApp {
                     window.set_visible(true);
                     window.request_redraw();
                 }
+                if let Some(hwnd) = self.hwnd {
+                    unsafe {
+                        let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+                        let _ = SetWindowPos(
+                            hwnd,
+                            HWND_TOPMOST,
+                            0,
+                            0,
+                            0,
+                            0,
+                            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW,
+                        );
+                    }
+                }
             }
             OverlayCommand::Hide => {
                 let mut state = self.state.lock().unwrap();
@@ -496,6 +510,11 @@ impl ApplicationHandler<OverlayCommand> for OverlayApp {
 
                 if let Some(window) = self.window.as_ref() {
                     window.set_visible(false);
+                }
+                if let Some(hwnd) = self.hwnd {
+                    unsafe {
+                        let _ = ShowWindow(hwnd, SW_HIDE);
+                    }
                 }
             }
             OverlayCommand::SetRecording(recording) => {
@@ -513,6 +532,24 @@ impl ApplicationHandler<OverlayCommand> for OverlayApp {
                         window.set_visible(true);
                     }
                     window.request_redraw();
+                }
+                if let Some(hwnd) = self.hwnd {
+                    unsafe {
+                        if recording {
+                            let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+                            let _ = SetWindowPos(
+                                hwnd,
+                                HWND_TOPMOST,
+                                0,
+                                0,
+                                0,
+                                0,
+                                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW,
+                            );
+                        } else {
+                            let _ = ShowWindow(hwnd, SW_HIDE);
+                        }
+                    }
                 }
             }
             OverlayCommand::AnimationTick => {

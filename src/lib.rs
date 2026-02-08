@@ -10,3 +10,4 @@ pub mod ui;
 pub mod input;
 pub mod overlay_win32;
 pub mod streaming;
+pub mod whisper_server;

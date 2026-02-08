@@ -5,7 +5,7 @@ use std::thread;
 use tracing::{error, info};
 use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    RegisterHotKey, UnregisterHotKey, MOD_CONTROL, MOD_SHIFT,
+    RegisterHotKey, UnregisterHotKey, MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     GetForegroundWindow, GetMessageW, SetForegroundWindow, ShowWindow, MSG, SW_RESTORE, WM_HOTKEY,
@@ -58,7 +58,7 @@ pub fn start_hotkey_listener(tx: mpsc::Sender<HotkeyEvent>) -> thread::JoinHandl
     thread::spawn(move || {
         unsafe {
             // Register Ctrl+Shift+D
-            let modifiers = MOD_CONTROL | MOD_SHIFT;
+            let modifiers = MOD_CONTROL | MOD_SHIFT | MOD_NOREPEAT;
             let vk_d = 0x44u32; // Virtual key code for 'D'
 
             if RegisterHotKey(None, HOTKEY_ID, modifiers, vk_d).is_err() {
@@ -74,25 +74,23 @@ pub fn start_hotkey_listener(tx: mpsc::Sender<HotkeyEvent>) -> thread::JoinHandl
 
             while GetMessageW(&mut msg, None, 0, 0).into() {
                 if msg.message == WM_HOTKEY && msg.wParam.0 as i32 == HOTKEY_ID {
-                    info!(
+                    tracing::debug!(
                         "[HOTKEY] WM_HOTKEY received! Current toggle_state: {}",
                         toggle_state
                     );
 
                     // Calculate next state BEFORE toggling
                     let next_state = !toggle_state;
-                    info!("[HOTKEY] Will toggle to: {}", next_state);
 
                     // Save the currently focused window handle
                     let hwnd = GetForegroundWindow().0 as isize;
-                    info!("[HOTKEY] Current foreground window: {}", hwnd);
 
                     // Send event based on NEXT state
                     let send_result = if next_state {
-                        info!("[HOTKEY] ===> SENDING RecordStart event...");
+                        info!("[HOTKEY] RecordStart");
                         tx.send(HotkeyEvent::RecordStart { hwnd })
                     } else {
-                        info!("[HOTKEY] ===> SENDING RecordStop event...");
+                        info!("[HOTKEY] RecordStop");
                         tx.send(HotkeyEvent::RecordStop { hwnd })
                     };
 
@@ -100,16 +98,9 @@ pub fn start_hotkey_listener(tx: mpsc::Sender<HotkeyEvent>) -> thread::JoinHandl
                     match send_result {
                         Ok(_) => {
                             toggle_state = next_state;
-                            info!(
-                                "[HOTKEY] Event sent successfully, toggle_state is now: {}",
-                                toggle_state
-                            );
                         }
                         Err(e) => {
-                            error!(
-                                "[HOTKEY] FAILED to send event: {}! toggle_state remains: {}",
-                                e, toggle_state
-                            );
+                            error!("[HOTKEY] Failed to send event: {}", e);
                         }
                     }
                 }
