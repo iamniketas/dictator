@@ -38,19 +38,8 @@ impl WhisperServerManager {
                 self.model_path
             );
 
-            let mut cmd = Command::new("python");
-            cmd.arg(script)
-                .arg(&self.model_path)
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null());
-
-            #[cfg(target_os = "windows")]
-            {
-                cmd.creation_flags(CREATE_NO_WINDOW);
-            }
-
-            let child = cmd.spawn().context("Failed to spawn whisper_server.py")?;
+            let child = spawn_server_process(&script, &self.model_path)
+                .context("Failed to spawn whisper_server.py")?;
             self.child = Some(child);
             self.owns_process = true;
         }
@@ -114,6 +103,35 @@ impl WhisperServerManager {
             Err(_) => false,
         }
     }
+}
+
+fn spawn_server_process(script: &Path, model_path: &str) -> Result<Child> {
+    // pythonw prevents a visible console window; fallback to python if unavailable.
+    let candidates = ["pythonw", "python"];
+    let mut last_error: Option<anyhow::Error> = None;
+
+    for exe in candidates {
+        let mut cmd = Command::new(exe);
+        cmd.arg(script)
+            .arg(model_path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+
+        #[cfg(target_os = "windows")]
+        {
+            cmd.creation_flags(CREATE_NO_WINDOW);
+        }
+
+        match cmd.spawn() {
+            Ok(child) => return Ok(child),
+            Err(e) => {
+                last_error = Some(anyhow::anyhow!("{}: {}", exe, e));
+            }
+        }
+    }
+
+    Err(last_error.unwrap_or_else(|| anyhow::anyhow!("No python executable found")))
 }
 
 impl Drop for WhisperServerManager {
