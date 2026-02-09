@@ -32,13 +32,22 @@ impl WhisperServerManager {
 
         if self.child.is_none() {
             let script = find_server_script()?;
+            let model_arg = if std::path::Path::new(&self.model_path).exists() {
+                Some(self.model_path.as_str())
+            } else {
+                warn!(
+                    "[WHISPER] Configured model path does not exist: {}. Using server default path.",
+                    self.model_path
+                );
+                None
+            };
             info!(
                 "[WHISPER] Starting local server: {} {}",
                 script.display(),
-                self.model_path
+                model_arg.unwrap_or("<server-default>")
             );
 
-            let child = spawn_server_process(&script, &self.model_path)
+            let child = spawn_server_process(&script, model_arg)
                 .context("Failed to spawn whisper_server.py")?;
             self.child = Some(child);
             self.owns_process = true;
@@ -105,7 +114,7 @@ impl WhisperServerManager {
     }
 }
 
-fn spawn_server_process(script: &Path, model_path: &str) -> Result<Child> {
+fn spawn_server_process(script: &Path, model_path: Option<&str>) -> Result<Child> {
     // pythonw prevents a visible console window; fallback to python if unavailable.
     let candidates = ["pythonw", "python"];
     let mut last_error: Option<anyhow::Error> = None;
@@ -113,10 +122,13 @@ fn spawn_server_process(script: &Path, model_path: &str) -> Result<Child> {
     for exe in candidates {
         let mut cmd = Command::new(exe);
         cmd.arg(script)
-            .arg(model_path)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
+
+        if let Some(path) = model_path {
+            cmd.arg(path);
+        }
 
         #[cfg(target_os = "windows")]
         {
