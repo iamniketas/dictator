@@ -26,6 +26,25 @@ impl WhisperServerManager {
     }
 
     pub fn ensure_running(&mut self, startup_timeout: Duration) -> Result<()> {
+        self.start_if_needed()?;
+
+        let start = Instant::now();
+        while start.elapsed() < startup_timeout {
+            if self.poll_ready()? {
+                info!("[WHISPER] Server is ready");
+                return Ok(());
+            }
+
+            std::thread::sleep(Duration::from_millis(250));
+        }
+
+        anyhow::bail!(
+            "Timed out waiting for Whisper server to become healthy after {:?}",
+            startup_timeout
+        )
+    }
+
+    pub fn start_if_needed(&mut self) -> Result<()> {
         if Self::is_healthy() {
             return Ok(());
         }
@@ -53,28 +72,23 @@ impl WhisperServerManager {
             self.owns_process = true;
         }
 
-        let start = Instant::now();
-        while start.elapsed() < startup_timeout {
-            if Self::is_healthy() {
-                info!("[WHISPER] Server is ready");
-                return Ok(());
-            }
+        Ok(())
+    }
 
-            if let Some(child) = self.child.as_mut() {
-                if let Some(status) = child.try_wait().context("Failed to poll server process")? {
-                    self.child = None;
-                    self.owns_process = false;
-                    anyhow::bail!("Whisper server exited early with status: {}", status);
-                }
-            }
-
-            std::thread::sleep(Duration::from_millis(250));
+    pub fn poll_ready(&mut self) -> Result<bool> {
+        if Self::is_healthy() {
+            return Ok(true);
         }
 
-        anyhow::bail!(
-            "Timed out waiting for Whisper server to become healthy after {:?}",
-            startup_timeout
-        )
+        if let Some(child) = self.child.as_mut() {
+            if let Some(status) = child.try_wait().context("Failed to poll server process")? {
+                self.child = None;
+                self.owns_process = false;
+                anyhow::bail!("Whisper server exited early with status: {}", status);
+            }
+        }
+
+        Ok(false)
     }
 
     pub fn stop_if_owned(&mut self) {

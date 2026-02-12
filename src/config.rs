@@ -22,13 +22,13 @@ pub struct StreamingConfig {
     /// Enable real-time streaming transcription (default: false)
     #[serde(default)]
     pub enabled: bool,
-    /// Chunk/poll interval in seconds (default: 3)
+    /// Chunk/poll interval in seconds (default: 15)
     #[serde(default = "default_streaming_poll_interval")]
     pub poll_interval: u64,
 }
 
 fn default_streaming_poll_interval() -> u64 {
-    3
+    15
 }
 
 /// Hotkey configuration

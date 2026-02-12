@@ -32,14 +32,15 @@ impl Default for OverlayConfig {
             width: 800,
             height: 120,
             font_size: 24,
-            text_color: (240, 240, 240), // Off-white text
-            bg_color: (45, 45, 48, 235), // Dark gray background
+            text_color: (245, 245, 245), // Higher contrast text
+            bg_color: (28, 28, 30, 245), // Nearly opaque dark background
         }
     }
 }
 
 struct OverlayState {
-    text: String,
+    status_text: String,
+    body_text: String,
     visible: bool,
     config: OverlayConfig,
     position: (i32, i32),
@@ -60,7 +61,8 @@ enum OverlayCommand {
     Show(String),
     Hide,
     SetRecording(bool),
-    UpdatePartialText(String),
+    UpdateStatusText(String),
+    UpdateBodyText(String),
     AnimationTick,
     SetPosition(i32, i32),
     Shutdown,
@@ -143,10 +145,11 @@ impl OverlayApp {
     }
 
     fn render(&mut self) {
-        let (text, visible, config, is_recording, recording_frame) = {
+        let (status_text, body_text, visible, config, is_recording, recording_frame) = {
             let state = self.state.lock().unwrap();
             (
-                state.text.clone(),
+                state.status_text.clone(),
+                state.body_text.clone(),
                 state.visible,
                 state.config.clone(),
                 state.is_recording,
@@ -165,7 +168,6 @@ impl OverlayApp {
                     return;
                 }
 
-                // Create memory DC for double buffering
                 let mem_dc = CreateCompatibleDC(hdc);
                 let rect = RECT {
                     left: 0,
@@ -174,23 +176,28 @@ impl OverlayApp {
                     bottom: config.height as i32,
                 };
 
-                // Create bitmap
                 let bmp = CreateCompatibleBitmap(hdc, config.width as i32, config.height as i32);
                 let old_bmp = SelectObject(mem_dc, bmp);
 
-                // Fill background
                 let (r, g, b, _a) = config.bg_color;
                 let brush =
                     CreateSolidBrush(COLORREF((r as u32) << 16 | (g as u32) << 8 | b as u32));
                 FillRect(mem_dc, &rect, brush);
                 let _ = DeleteObject(brush);
 
-                // Set up fonts
+                // Border improves readability on bright backgrounds.
+                let border_pen = CreatePen(PS_SOLID, 1, COLORREF(0x005A5A5A));
+                let old_pen = SelectObject(mem_dc, border_pen);
+                let old_brush = SelectObject(mem_dc, GetStockObject(HOLLOW_BRUSH));
+                let _ = Rectangle(mem_dc, 0, 0, config.width as i32, config.height as i32);
+                SelectObject(mem_dc, old_pen);
+                SelectObject(mem_dc, old_brush);
+                let _ = DeleteObject(border_pen);
+
                 if self.font.is_none() || self.rec_font.is_none() {
                     self.create_fonts(config.font_size);
                 }
 
-                // Set text color and background
                 let (tr, tg, tb) = config.text_color;
                 SetTextColor(
                     mem_dc,
@@ -198,16 +205,13 @@ impl OverlayApp {
                 );
                 SetBkMode(mem_dc, TRANSPARENT);
 
-                // Draw recording indicator (pulsing red circle)
                 if is_recording {
-                    // Toggle every second: frame % 2 gives 0 or 1
                     let radius = if recording_frame % 2 == 0 { 8 } else { 12 };
                     let center_x = 30;
                     let center_y = config.height as i32 / 2;
 
-                    let red_brush = CreateSolidBrush(COLORREF(0x0000FF)); // Red in BGR
-                    let old_brush = SelectObject(mem_dc, red_brush);
-
+                    let red_brush = CreateSolidBrush(COLORREF(0x0000FF));
+                    let old_red_brush = SelectObject(mem_dc, red_brush);
                     let _ = Ellipse(
                         mem_dc,
                         center_x - radius,
@@ -215,11 +219,9 @@ impl OverlayApp {
                         center_x + radius,
                         center_y + radius,
                     );
-
-                    SelectObject(mem_dc, old_brush);
+                    SelectObject(mem_dc, old_red_brush);
                     let _ = DeleteObject(red_brush);
 
-                    // Draw "REC" text next to circle with smaller font
                     if let Some(rec_font) = self.rec_font {
                         SelectObject(mem_dc, rec_font);
                     }
@@ -236,8 +238,6 @@ impl OverlayApp {
                         &mut rec_rect,
                         DT_LEFT | DT_VCENTER | DT_SINGLELINE,
                     );
-
-                    // Restore main font for the rest
                     if let Some(main_font) = self.font {
                         SelectObject(mem_dc, main_font);
                     }
@@ -245,32 +245,47 @@ impl OverlayApp {
                     SelectObject(mem_dc, main_font);
                 }
 
-                // Draw main text - only last visible lines
-                let text_str: &str = &text;
-                if !text_str.is_empty() {
-                    // Calculate how many lines fit (5 lines fit in 120px height with 24px font)
-                    const MAX_LINES: usize = 5;
-                    const MAX_CHARS_PER_LINE: usize = 75;
-                    
-                    // Wrap text and keep only last lines
-                    let visible_text = Self::get_last_lines(text_str, MAX_LINES, MAX_CHARS_PER_LINE);
-                    
-                    let mut text_utf16: Vec<u16> = visible_text.encode_utf16().collect();
-                    let mut text_rect = RECT {
-                        left: if is_recording { 85 } else { 20 },
-                        top: 10,
+                let left_margin = if is_recording { 85 } else { 20 };
+
+                if !status_text.is_empty() {
+                    if let Some(rec_font) = self.rec_font {
+                        SelectObject(mem_dc, rec_font);
+                    }
+
+                    let mut status_utf16: Vec<u16> = status_text.encode_utf16().collect();
+                    let mut status_rect = RECT {
+                        left: left_margin,
+                        top: 8,
                         right: config.width as i32 - 20,
-                        bottom: config.height as i32 - 10,
+                        bottom: 38,
                     };
                     DrawTextW(
                         mem_dc,
-                        &mut text_utf16,
-                        &mut text_rect,
+                        &mut status_utf16,
+                        &mut status_rect,
                         DT_LEFT | DT_TOP | DT_WORDBREAK,
                     );
+
+                    if let Some(main_font) = self.font {
+                        SelectObject(mem_dc, main_font);
+                    }
                 }
 
-                // Copy to window
+                if !body_text.is_empty() {
+                    const MAX_LINES: usize = 3;
+                    const MAX_CHARS_PER_LINE: usize = 75;
+                    let visible_text = Self::get_last_lines(&body_text, MAX_LINES, MAX_CHARS_PER_LINE);
+
+                    let mut body_utf16: Vec<u16> = visible_text.encode_utf16().collect();
+                    let mut body_rect = RECT {
+                        left: left_margin,
+                        top: if status_text.is_empty() { 10 } else { 42 },
+                        right: config.width as i32 - 20,
+                        bottom: config.height as i32 - 10,
+                    };
+                    DrawTextW(mem_dc, &mut body_utf16, &mut body_rect, DT_LEFT | DT_TOP | DT_WORDBREAK);
+                }
+
                 let _ = BitBlt(
                     hdc,
                     0,
@@ -283,7 +298,6 @@ impl OverlayApp {
                     SRCCOPY,
                 );
 
-                // Cleanup
                 SelectObject(mem_dc, old_bmp);
                 let _ = DeleteObject(bmp);
                 let _ = DeleteDC(mem_dc);
@@ -478,7 +492,8 @@ impl ApplicationHandler<OverlayCommand> for OverlayApp {
         match event {
             OverlayCommand::Show(text) => {
                 let mut state = self.state.lock().unwrap();
-                state.text = text;
+                state.status_text.clear();
+                state.body_text = text;
                 state.visible = true;
                 state.is_recording = false;
                 drop(state);
@@ -523,7 +538,8 @@ impl ApplicationHandler<OverlayCommand> for OverlayApp {
                 state.recording_frame = 0;
                 if recording {
                     state.visible = true;
-                    state.text = String::new();
+                    state.status_text.clear();
+                    state.body_text.clear();
                 }
                 drop(state);
 
@@ -571,10 +587,19 @@ impl ApplicationHandler<OverlayCommand> for OverlayApp {
                 let mut state = self.state.lock().unwrap();
                 state.position = (x, y);
             }
-            OverlayCommand::UpdatePartialText(text) => {
+            OverlayCommand::UpdateStatusText(text) => {
                 let mut state = self.state.lock().unwrap();
-                // Store full text - DT_BOTTOM will align to bottom and clip top
-                state.text = text;
+                state.status_text = text;
+                state.visible = true;
+                drop(state);
+
+                if let Some(window) = self.window.as_ref() {
+                    window.request_redraw();
+                }
+            }
+            OverlayCommand::UpdateBodyText(text) => {
+                let mut state = self.state.lock().unwrap();
+                state.body_text = text;
                 state.visible = true;
                 drop(state);
 
@@ -592,7 +617,8 @@ impl ApplicationHandler<OverlayCommand> for OverlayApp {
 impl OverlayWindow {
     pub fn new(config: OverlayConfig) -> Result<Self> {
         let state = Arc::new(Mutex::new(OverlayState {
-            text: String::new(),
+            status_text: String::new(),
+            body_text: String::new(),
             visible: false,
             config,
             position: (100, 100),
@@ -753,10 +779,17 @@ impl OverlayWindow {
         }
     }
 
-    /// Update partial text during streaming transcription
-    pub fn update_partial_text(&self, text: &str) {
+    /// Update overlay status line (top)
+    pub fn update_status_text(&self, text: &str) {
         if let Some(proxy) = self.event_loop_proxy.as_ref() {
-            let _ = proxy.send_event(OverlayCommand::UpdatePartialText(text.to_string()));
+            let _ = proxy.send_event(OverlayCommand::UpdateStatusText(text.to_string()));
+        }
+    }
+
+    /// Update overlay body text area (bottom)
+    pub fn update_body_text(&self, text: &str) {
+        if let Some(proxy) = self.event_loop_proxy.as_ref() {
+            let _ = proxy.send_event(OverlayCommand::UpdateBodyText(text.to_string()));
         }
     }
 }

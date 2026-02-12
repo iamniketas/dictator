@@ -27,7 +27,7 @@ const ID_CHUNK_15: u16 = 1005;
 
 static SHOULD_EXIT: AtomicBool = AtomicBool::new(false);
 static STREAMING_ENABLED: AtomicBool = AtomicBool::new(false);
-static STREAMING_CHUNK_SECONDS: AtomicU64 = AtomicU64::new(3);
+static STREAMING_CHUNK_SECONDS: AtomicU64 = AtomicU64::new(15);
 
 /// Check if streaming is enabled
 pub fn is_streaming_enabled() -> bool {
@@ -48,7 +48,7 @@ pub fn streaming_chunk_seconds() -> u64 {
 pub fn set_streaming_chunk_seconds(seconds: u64) {
     let normalized = match seconds {
         3 | 8 | 15 => seconds,
-        _ => 3,
+        _ => 15,
     };
     STREAMING_CHUNK_SECONDS.store(normalized, Ordering::SeqCst);
 }

@@ -137,3 +137,16 @@ model = "glm-4.7-flash"
 - Tray menu improved:
   - Streaming chunk length can now be selected: `3s`, `8s`, `15s`.
   - Selected chunk length is used for next and subsequent streaming sessions.
+
+## 2026-02-12 Update (v0.2.3)
+
+- Streaming/overlay UX fixes:
+  - Recording no longer blocks UI while Whisper warmup is in progress.
+  - Overlay now has two independent zones: status (top) and text (bottom).
+  - Streaming status and last partial text are shown simultaneously.
+- Overlay visibility improved:
+  - Increased background opacity (nearly opaque).
+  - Added border for readability on bright backgrounds.
+- Streaming defaults:
+  - Default chunk duration changed to 15s.
+  - Tray chunk fallback default is now 15s.

@@ -22,18 +22,23 @@ fn estimate_recording_size_mb(elapsed: Duration) -> f32 {
     (samples * std::mem::size_of::<f32>() as f32) / (1024.0 * 1024.0)
 }
 
-fn format_recording_status(elapsed: Duration, streaming_enabled: bool, chunk_seconds: u64) -> String {
+fn format_recording_status(
+    elapsed: Duration,
+    streaming_enabled: bool,
+    chunk_seconds: u64,
+    whisper_status: &str,
+) -> String {
     let elapsed_secs = elapsed.as_secs_f32();
     let size_mb = estimate_recording_size_mb(elapsed);
     if streaming_enabled {
         format!(
-            "Recording: {:.1}s | ~{:.2} MB\nMode: streaming (chunk {}s)",
-            elapsed_secs, size_mb, chunk_seconds
+            "Recording: {:.1}s | ~{:.2} MB | {}\nMode: streaming (chunk {}s)",
+            elapsed_secs, size_mb, whisper_status, chunk_seconds
         )
     } else {
         format!(
-            "Recording: {:.1}s | ~{:.2} MB\nMode: full transcription",
-            elapsed_secs, size_mb
+            "Recording: {:.1}s | ~{:.2} MB | {}\nMode: full transcription",
+            elapsed_secs, size_mb, whisper_status
         )
     }
 }
@@ -129,6 +134,8 @@ fn main() -> Result<()> {
         let mut recording_started_at: Option<Instant> = None;
         let mut last_recording_second: u64 = u64::MAX;
         let mut avg_transcribe_ratio: f32 = 0.20;
+        let mut whisper_ready = false;
+        let mut whisper_status_text = String::from("Whisper: idle");
         let mut whisper_manager = WhisperServerManager::new(
             config_clone
                 .whisper
@@ -158,14 +165,30 @@ fn main() -> Result<()> {
                             let elapsed_sec = elapsed.as_secs();
                             if elapsed_sec != last_recording_second {
                                 last_recording_second = elapsed_sec;
+                                if !whisper_ready {
+                                    match whisper_manager.poll_ready() {
+                                        Ok(true) => {
+                                            whisper_ready = true;
+                                            whisper_status_text = "Whisper: ready".to_string();
+                                        }
+                                        Ok(false) => {
+                                            whisper_status_text = "Whisper: starting...".to_string();
+                                        }
+                                        Err(e) => {
+                                            whisper_status_text = "Whisper: startup error".to_string();
+                                            warn!("[MAIN] Whisper poll error: {}", e);
+                                        }
+                                    }
+                                }
                                 let streaming_enabled = ui::is_streaming_enabled();
                                 let chunk_seconds = ui::streaming_chunk_seconds();
                                 let status = format_recording_status(
                                     elapsed,
                                     streaming_enabled,
                                     chunk_seconds,
+                                    &whisper_status_text,
                                 );
-                                overlay_clone.update_partial_text(&status);
+                                overlay_clone.update_status_text(&status);
                             }
                         }
                     }
@@ -184,7 +207,7 @@ fn main() -> Result<()> {
                     StreamingEvent::PartialText(text) => {
                         info!("[MAIN] 📥 Streaming partial text: \"{}\"", text);
                         accumulated_text = text.clone();
-                        overlay_clone.update_partial_text(&text);
+                        overlay_clone.update_body_text(&text);
                     }
                     StreamingEvent::FinalText(text) => {
                         info!("[MAIN] 🏁 Streaming final text: \"{}\"", text);
@@ -221,7 +244,8 @@ fn main() -> Result<()> {
                     overlay_clone.position_near_cursor();
                     info!("[MAIN] Calling overlay.set_recording(true)...");
                     overlay_clone.set_recording(true);
-                    overlay_clone.update_partial_text("Preparing transcription...");
+                    overlay_clone.update_status_text("Preparing transcription...");
+                    overlay_clone.update_body_text("");
 
                     info!("[MAIN] Calling recorder.start_recording()...");
                     if let Err(e) = recorder_clone.start_recording() {
@@ -232,17 +256,29 @@ fn main() -> Result<()> {
                         info!("[MAIN] Recording started");
                         let streaming_enabled = ui::is_streaming_enabled();
                         let chunk_seconds = ui::streaming_chunk_seconds();
-                        overlay_clone.update_partial_text(&format_recording_status(
+                        overlay_clone.update_status_text(&format_recording_status(
                             Duration::from_secs(0),
                             streaming_enabled,
                             chunk_seconds,
+                            &whisper_status_text,
                         ));
 
-                        if let Err(e) = whisper_manager.ensure_running(Duration::from_secs(30)) {
-                            warn!("[MAIN] Whisper server warmup failed: {}", e);
-                            overlay_clone
-                                .update_partial_text("Recording... (server is not ready)");
+                        whisper_ready = WhisperServerManager::is_healthy();
+                        if whisper_ready {
+                            whisper_status_text = "Whisper: ready".to_string();
+                        } else {
+                            whisper_status_text = "Whisper: starting...".to_string();
+                            if let Err(e) = whisper_manager.start_if_needed() {
+                                warn!("[MAIN] Whisper server warmup start failed: {}", e);
+                                whisper_status_text = "Whisper: startup error".to_string();
+                            }
                         }
+                        overlay_clone.update_status_text(&format_recording_status(
+                            Duration::from_secs(0),
+                            streaming_enabled,
+                            chunk_seconds,
+                            &whisper_status_text,
+                        ));
 
                         // Start streaming if enabled (from tray menu)
                         if ui::is_streaming_enabled() {
@@ -271,6 +307,8 @@ fn main() -> Result<()> {
                     is_recording = false;
                     recording_started_at = None;
                     last_recording_second = u64::MAX;
+                    whisper_ready = false;
+                    whisper_status_text = "Whisper: idle".to_string();
                     overlay_clone.set_recording(false);
 
                     // CRITICAL: Stop streaming FIRST while recording is still active
@@ -350,7 +388,8 @@ fn main() -> Result<()> {
                             continue;
                         }
 
-                        overlay_clone.show("Transcribing...");
+                        overlay_clone.update_status_text("Transcribing...");
+                        overlay_clone.update_body_text("");
 
                         let audio_duration_secs = audio_data.len() as f32 / 16000.0;
                         let expected_secs = (audio_duration_secs * avg_transcribe_ratio).max(2.0);
@@ -380,7 +419,7 @@ fn main() -> Result<()> {
                                         progress,
                                     );
                                     spinner_index = spinner_index.wrapping_add(1);
-                                    overlay_clone.update_partial_text(&status);
+                                    overlay_clone.update_status_text(&status);
                                 }
                                 Err(mpsc::RecvTimeoutError::Disconnected) => {
                                     break Err(anyhow::anyhow!(
@@ -428,7 +467,7 @@ fn main() -> Result<()> {
 
                     // Correct text with Ollama (if enabled in config)
                     let final_text = if config_clone.ollama.enabled {
-                        overlay_clone.show("Correcting...");
+                        overlay_clone.update_status_text("Correcting...");
                         match ollama_clone.correct_text(&raw_text) {
                             Ok(corrected) => corrected,
                             Err(e) => {
@@ -485,7 +524,7 @@ fn main() -> Result<()> {
                     StreamingEvent::PartialText(text) => {
                         info!("[MAIN] 📥 Streaming partial text: \"{}\"", text);
                         accumulated_text = text.clone();
-                        overlay_clone.update_partial_text(&text);
+                        overlay_clone.update_body_text(&text);
                     }
                     StreamingEvent::FinalText(text) => {
                         info!("[MAIN] 🏁 Streaming final text: \"{}\"", text);
