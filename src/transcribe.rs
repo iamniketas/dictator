@@ -47,28 +47,41 @@ pub fn transcribe_audio(audio_data: &[f32], language: &str) -> Result<String> {
         .part("file", file_part)
         .text("language", language.to_string());
 
+    // Dynamic timeout: at least 60s, or 2x audio duration (whisper can be slow)
+    let timeout_secs = (60.0 + duration_secs * 1.5) as u64;
+    info!("HTTP client timeout set to {} seconds", timeout_secs);
+
     let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
+        .timeout(std::time::Duration::from_secs(timeout_secs))
         .user_agent("curl/7.68.0")
         .no_proxy()  // CRITICAL: disable system proxy for localhost
         .build()
         .context("Failed to build HTTP client")?;
 
     info!("Sending transcription request to http://127.0.0.1:5000/transcribe");
-    let response = client
+    let response = match client
         .post("http://127.0.0.1:5000/transcribe")
         .header("Connection", "close")
         .multipart(form)
         .send()
-        .context("Failed to send HTTP request to Whisper server")?;
+    {
+        Ok(resp) => resp,
+        Err(e) => {
+            // Keep audio file for debugging on error
+            let backup_path = audio_path.with_extension("wav.failed");
+            let _ = std::fs::rename(&audio_path, &backup_path);
+            anyhow::bail!("Failed to send HTTP request to Whisper server: {} (audio saved to {:?})", e, backup_path);
+        }
+    };
 
     let status = response.status();
     info!("Received response with status: {}", status);
 
-    // Clean up temp file
-    let _ = std::fs::remove_file(&audio_path);
-
     if !status.is_success() {
+        // Keep audio file on server error too
+        let backup_path = audio_path.with_extension("wav.failed");
+        let _ = std::fs::rename(&audio_path, &backup_path);
+        warn!("Audio file preserved at: {:?}", backup_path);
         let error_text = response.text().unwrap_or_else(|_| "Unknown error".to_string());
         warn!("Response body: {}", error_text);
         anyhow::bail!("Whisper server returned {}: {}", status, error_text);
@@ -84,6 +97,7 @@ pub fn transcribe_audio(audio_data: &[f32], language: &str) -> Result<String> {
         .context("Missing 'text' field in response")?
         .to_string();
 
+    let _ = std::fs::remove_file(&audio_path);
     info!("Transcription complete: \"{}\"", result);
     Ok(result)
 }
@@ -167,29 +181,40 @@ pub async fn transcribe_audio_async(audio_data: &[f32], language: &str) -> Resul
         .part("file", file_part)
         .text("language", language.to_string());
 
+    // Dynamic timeout: at least 60s, or 1.5x audio duration
+    let timeout_secs = (60.0 + duration_secs * 1.5) as u64;
+    info!("HTTP client timeout set to {} seconds (async)", timeout_secs);
+
     let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
+        .timeout(std::time::Duration::from_secs(timeout_secs))
         .user_agent("curl/7.68.0")
         .no_proxy()
         .build()
         .context("Failed to build HTTP client")?;
 
     info!("Sending transcription request to http://127.0.0.1:5000/transcribe");
-    let response = client
+    let response = match client
         .post("http://127.0.0.1:5000/transcribe")
         .header("Connection", "close")
         .multipart(form)
         .send()
         .await
-        .context("Failed to send HTTP request to Whisper server")?;
+    {
+        Ok(resp) => resp,
+        Err(e) => {
+            let backup_path = audio_path.with_extension("wav.failed");
+            let _ = tokio::fs::rename(&audio_path, &backup_path).await;
+            anyhow::bail!("Failed to send HTTP request to Whisper server: {} (audio saved to {:?})", e, backup_path);
+        }
+    };
 
     let status = response.status();
     info!("Received response with status: {}", status);
 
-    // Clean up temp file
-    let _ = tokio::fs::remove_file(&audio_path).await;
-
     if !status.is_success() {
+        let backup_path = audio_path.with_extension("wav.failed");
+        let _ = tokio::fs::rename(&audio_path, &backup_path).await;
+        warn!("Audio file preserved at: {:?}", backup_path);
         let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
         warn!("Response body: {}", error_text);
         anyhow::bail!("Whisper server returned {}: {}", status, error_text);
@@ -206,6 +231,7 @@ pub async fn transcribe_audio_async(audio_data: &[f32], language: &str) -> Resul
         .context("Missing 'text' field in response")?
         .to_string();
 
+    let _ = tokio::fs::remove_file(&audio_path).await;
     info!("Transcription complete: \"{}\"", result);
     Ok(result)
 }

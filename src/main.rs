@@ -4,7 +4,7 @@
 use anyhow::Result;
 use std::sync::mpsc;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tracing::{error, info, warn};
 
 use dictator::audio::AudioRecorder;
@@ -16,6 +16,43 @@ use dictator::streaming::{StreamingEvent, StreamingTranscriber};
 use dictator::transcribe;
 use dictator::ui;
 use dictator::whisper_server::WhisperServerManager;
+
+fn estimate_recording_size_mb(elapsed: Duration) -> f32 {
+    let samples = elapsed.as_secs_f32() * 16000.0;
+    (samples * std::mem::size_of::<f32>() as f32) / (1024.0 * 1024.0)
+}
+
+fn format_recording_status(elapsed: Duration, streaming_enabled: bool, chunk_seconds: u64) -> String {
+    let elapsed_secs = elapsed.as_secs_f32();
+    let size_mb = estimate_recording_size_mb(elapsed);
+    if streaming_enabled {
+        format!(
+            "Recording: {:.1}s | ~{:.2} MB\nMode: streaming (chunk {}s)",
+            elapsed_secs, size_mb, chunk_seconds
+        )
+    } else {
+        format!(
+            "Recording: {:.1}s | ~{:.2} MB\nMode: full transcription",
+            elapsed_secs, size_mb
+        )
+    }
+}
+
+fn format_transcribing_status(
+    spinner: &str,
+    elapsed_secs: f32,
+    expected_secs: f32,
+    progress: f32,
+) -> String {
+    let eta = (expected_secs - elapsed_secs).max(0.0);
+    format!(
+        "Transcribing {} {:.0}%\nElapsed: {:.1}s | ETA: ~{:.1}s",
+        spinner,
+        progress * 100.0,
+        elapsed_secs,
+        eta
+    )
+}
 
 fn main() -> Result<()> {
     // Initialize logging to file
@@ -46,7 +83,12 @@ fn main() -> Result<()> {
 
     // Always start in full transcription mode (streaming disabled by default).
     ui::set_streaming_enabled(false);
+    ui::set_streaming_chunk_seconds(config.streaming.poll_interval);
     info!("[MAIN] Initial streaming state: {}", ui::is_streaming_enabled());
+    info!(
+        "[MAIN] Initial streaming chunk: {}s",
+        ui::streaming_chunk_seconds()
+    );
 
     // Create Ollama client
     let ollama = Arc::new(OllamaClient::new(&config.ollama.url, &config.ollama.model));
@@ -84,6 +126,9 @@ fn main() -> Result<()> {
         let mut is_recording = false;
         let mut streaming_transcriber: Option<StreamingTranscriber> = None;
         let mut accumulated_text = String::new();
+        let mut recording_started_at: Option<Instant> = None;
+        let mut last_recording_second: u64 = u64::MAX;
+        let mut avg_transcribe_ratio: f32 = 0.20;
         let mut whisper_manager = WhisperServerManager::new(
             config_clone
                 .whisper
@@ -107,7 +152,24 @@ fn main() -> Result<()> {
                     Some(evt)
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {
-                    // No hotkey event, continue to check streaming events
+                    if is_recording {
+                        if let Some(started_at) = recording_started_at {
+                            let elapsed = started_at.elapsed();
+                            let elapsed_sec = elapsed.as_secs();
+                            if elapsed_sec != last_recording_second {
+                                last_recording_second = elapsed_sec;
+                                let streaming_enabled = ui::is_streaming_enabled();
+                                let chunk_seconds = ui::streaming_chunk_seconds();
+                                let status = format_recording_status(
+                                    elapsed,
+                                    streaming_enabled,
+                                    chunk_seconds,
+                                );
+                                overlay_clone.update_partial_text(&status);
+                            }
+                        }
+                    }
+                    // No hotkey event, continue to check streaming events and recording progress
                     None
                 }
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
@@ -149,6 +211,8 @@ fn main() -> Result<()> {
 
                     info!("[MAIN] ===> PROCESSING RecordStart");
                     is_recording = true;
+                    recording_started_at = Some(Instant::now());
+                    last_recording_second = u64::MAX;
 
                     // Save the window handle for later focus restoration
                     saved_hwnd = Some(hwnd);
@@ -166,7 +230,13 @@ fn main() -> Result<()> {
                         overlay_clone.hide();
                     } else {
                         info!("[MAIN] Recording started");
-                        overlay_clone.update_partial_text("Recording...");
+                        let streaming_enabled = ui::is_streaming_enabled();
+                        let chunk_seconds = ui::streaming_chunk_seconds();
+                        overlay_clone.update_partial_text(&format_recording_status(
+                            Duration::from_secs(0),
+                            streaming_enabled,
+                            chunk_seconds,
+                        ));
 
                         if let Err(e) = whisper_manager.ensure_running(Duration::from_secs(30)) {
                             warn!("[MAIN] Whisper server warmup failed: {}", e);
@@ -178,9 +248,12 @@ fn main() -> Result<()> {
                         if ui::is_streaming_enabled() {
                             info!("[MAIN] Starting streaming transcription...");
                             accumulated_text.clear();
+                            let chunk_seconds = ui::streaming_chunk_seconds();
+                            info!("[MAIN] Streaming chunk duration: {}s", chunk_seconds);
                             streaming_transcriber = Some(StreamingTranscriber::new(
                                 streaming_tx_clone.clone(),
                                 config_clone.whisper.language.clone(),
+                                chunk_seconds,
                             ));
                             if let Some(ref mut st) = streaming_transcriber {
                                 st.start(recorder_clone.clone());
@@ -196,6 +269,8 @@ fn main() -> Result<()> {
 
                     info!("[MAIN] ===> PROCESSING RecordStop");
                     is_recording = false;
+                    recording_started_at = None;
+                    last_recording_second = u64::MAX;
                     overlay_clone.set_recording(false);
 
                     // CRITICAL: Stop streaming FIRST while recording is still active
@@ -275,12 +350,66 @@ fn main() -> Result<()> {
                             continue;
                         }
 
-                        // Show transcription status
                         overlay_clone.show("Transcribing...");
 
-                        // Transcribe audio
-                        match transcribe::transcribe_audio(&audio_data, &config.whisper.language) {
-                            Ok(text) => text,
+                        let audio_duration_secs = audio_data.len() as f32 / 16000.0;
+                        let expected_secs = (audio_duration_secs * avg_transcribe_ratio).max(2.0);
+                        let language = config.whisper.language.clone();
+                        let audio_for_transcribe = audio_data.clone();
+                        let (transcribe_tx, transcribe_rx) = mpsc::channel();
+
+                        std::thread::spawn(move || {
+                            let result = transcribe::transcribe_audio(&audio_for_transcribe, &language);
+                            let _ = transcribe_tx.send(result);
+                        });
+
+                        let transcribe_started = Instant::now();
+                        let spinner_frames = ["|", "/", "-", "\\"];
+                        let mut spinner_index = 0usize;
+
+                        let transcribed = loop {
+                            match transcribe_rx.recv_timeout(Duration::from_millis(250)) {
+                                Ok(result) => break result,
+                                Err(mpsc::RecvTimeoutError::Timeout) => {
+                                    let elapsed_secs = transcribe_started.elapsed().as_secs_f32();
+                                    let progress = (elapsed_secs / expected_secs).min(0.99);
+                                    let status = format_transcribing_status(
+                                        spinner_frames[spinner_index % spinner_frames.len()],
+                                        elapsed_secs,
+                                        expected_secs,
+                                        progress,
+                                    );
+                                    spinner_index = spinner_index.wrapping_add(1);
+                                    overlay_clone.update_partial_text(&status);
+                                }
+                                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                                    break Err(anyhow::anyhow!(
+                                        "Transcription worker thread disconnected unexpectedly"
+                                    ));
+                                }
+                            }
+                        };
+
+                        match transcribed {
+                            Ok(text) => {
+                                let transcribe_elapsed = transcribe_started.elapsed().as_secs_f32();
+                                if audio_duration_secs > 0.1 {
+                                    let observed_ratio =
+                                        (transcribe_elapsed / audio_duration_secs).clamp(0.05, 2.0);
+                                    avg_transcribe_ratio =
+                                        (avg_transcribe_ratio * 0.7 + observed_ratio * 0.3)
+                                            .clamp(0.05, 2.0);
+                                }
+
+                                let words = text.split_whitespace().count();
+                                let chars = text.chars().count();
+                                overlay_clone.show(&format!(
+                                    "Transcribed in {:.1}s\n{} words | {} chars",
+                                    transcribe_elapsed, words, chars
+                                ));
+                                std::thread::sleep(Duration::from_millis(1200));
+                                text
+                            }
                             Err(e) => {
                                 error!("Transcription error: {}", e);
                                 overlay_clone.hide();

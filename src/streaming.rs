@@ -1,7 +1,7 @@
 //! Streaming module - Real-time transcription with synchronous polling
 //!
 //! This is a simplified version without async/tokio to avoid threading issues.
-//! Uses simple thread::sleep for polling every 3 seconds.
+//! Uses simple thread::sleep with configurable chunk length.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
@@ -33,16 +33,23 @@ pub struct StreamingTranscriber {
     thread_handle: Option<JoinHandle<()>>,
     /// Language for transcription
     language: String,
+    /// Chunk duration for polling/transcription
+    chunk_duration_secs: u64,
 }
 
 impl StreamingTranscriber {
     /// Create new streaming transcriber
-    pub fn new(event_tx: mpsc::Sender<StreamingEvent>, language: String) -> Self {
+    pub fn new(
+        event_tx: mpsc::Sender<StreamingEvent>,
+        language: String,
+        chunk_duration_secs: u64,
+    ) -> Self {
         Self {
             event_tx,
             stop_signal: Arc::new(AtomicBool::new(false)),
             thread_handle: None,
             language,
+            chunk_duration_secs: chunk_duration_secs.max(1),
         }
     }
 
@@ -61,10 +68,15 @@ impl StreamingTranscriber {
         let event_tx = self.event_tx.clone();
         let stop_signal = self.stop_signal.clone();
         let language = self.language.clone();
+        let chunk_duration_secs = self.chunk_duration_secs;
+        let chunk_duration = Duration::from_secs(chunk_duration_secs);
 
         // Spawn simple thread with sleep-based polling
         let handle = thread::spawn(move || {
-            info!("[STREAMING] Thread started, will poll every 3 seconds");
+            info!(
+                "[STREAMING] Thread started, will poll every {} seconds",
+                chunk_duration_secs
+            );
 
             let mut accumulated_text = String::new();
             let mut last_processed_samples: usize = 0;
@@ -75,10 +87,10 @@ impl StreamingTranscriber {
             loop {
                 iteration += 1;
 
-                // Sleep for 3 seconds (synchronous, no async)
+                // Sleep for selected chunk duration (synchronous, no async)
                 // But skip sleep on final iteration
                 if !is_final_iteration {
-                    thread::sleep(Duration::from_secs(3));
+                    thread::sleep(chunk_duration);
                 }
 
                 // Check if we should stop (but still process remaining audio)
@@ -96,10 +108,10 @@ impl StreamingTranscriber {
                 }
 
                 // Get current buffer
-                info!("[STREAMING] Iteration {}: Getting buffer...", iteration);
+                tracing::debug!("[STREAMING] Iteration {}: Getting buffer...", iteration);
                 let (audio_data, start_idx) = match recorder.get_unprocessed_buffer() {
                     Ok((data, idx)) => {
-                        info!(
+                        tracing::debug!(
                             "[STREAMING] Got buffer: {} samples, start_idx: {}",
                             data.len(),
                             idx
@@ -119,7 +131,7 @@ impl StreamingTranscriber {
                 let new_samples = audio_data.len().saturating_sub(last_processed_samples);
                 let new_seconds = new_samples as f32 / 16000.0;
 
-                info!(
+                tracing::debug!(
                     "[STREAMING] New samples: {} ({:.1}s)",
                     new_samples, new_seconds
                 );
@@ -127,7 +139,7 @@ impl StreamingTranscriber {
                 // Skip if not enough new data (less than 1 second)
                 // But don't skip on final iteration - process whatever is left
                 if !is_final_iteration && new_seconds < 1.0 {
-                    info!(
+                    tracing::debug!(
                         "[STREAMING] Not enough new audio ({:.1}s < 1.0s), skipping",
                         new_seconds
                     );
@@ -160,7 +172,7 @@ impl StreamingTranscriber {
                         audio_to_process.len() as f32 / 16000.0
                     );
                 } else {
-                    info!(
+                    tracing::debug!(
                         "[STREAMING] Processing {} samples...",
                         audio_to_process.len()
                     );
@@ -176,8 +188,8 @@ impl StreamingTranscriber {
                             }
                             accumulated_text.push_str(&partial_text);
 
-                            info!("[STREAMING] Partial: \"{}\"", partial_text);
-                            info!("[STREAMING] Accumulated: \"{}\"", accumulated_text);
+                            tracing::debug!("[STREAMING] Partial ({} chars)", partial_text.len());
+                            info!("[STREAMING] Accumulated: {} chars", accumulated_text.len());
 
                             // Send full accumulated text to main thread (not just current chunk)
                             if let Err(e) =
@@ -197,7 +209,7 @@ impl StreamingTranscriber {
 
                 // Update last processed position
                 last_processed_samples = audio_data.len();
-                info!(
+                tracing::debug!(
                     "[STREAMING] Updated last_processed_samples to {}",
                     last_processed_samples
                 );
@@ -209,7 +221,7 @@ impl StreamingTranscriber {
             }
 
             // Send final text
-            info!("[STREAMING] Sending final text: \"{}\"", accumulated_text);
+            info!("[STREAMING] Sending final text ({} chars)", accumulated_text.len());
             let _ = event_tx.send(StreamingEvent::FinalText(accumulated_text));
             info!("[STREAMING] Thread exiting");
         });

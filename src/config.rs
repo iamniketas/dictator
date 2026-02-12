@@ -20,9 +20,15 @@ pub struct Config {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StreamingConfig {
     /// Enable real-time streaming transcription (default: false)
+    #[serde(default)]
     pub enabled: bool,
-    /// Poll interval in seconds (default: 3)
+    /// Chunk/poll interval in seconds (default: 3)
+    #[serde(default = "default_streaming_poll_interval")]
     pub poll_interval: u64,
+}
+
+fn default_streaming_poll_interval() -> u64 {
+    3
 }
 
 /// Hotkey configuration
@@ -77,7 +83,7 @@ impl Default for Config {
             },
             streaming: StreamingConfig {
                 enabled: false, // Disabled by default - safer
-                poll_interval: 3,
+                poll_interval: default_streaming_poll_interval(),
             },
         }
     }
@@ -87,7 +93,7 @@ impl Default for StreamingConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            poll_interval: 3,
+            poll_interval: default_streaming_poll_interval(),
         }
     }
 }

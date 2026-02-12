@@ -124,3 +124,16 @@ model = "glm-4.7-flash"
 ---
 
 *Последнее обновление: 2026-01-30*
+
+---
+
+## 2026-02-12 Update (v0.2.2 candidate)
+
+- Verified repository sync before changes: `main` and `origin/main` were equal at `bf36b6b`.
+- Overlay status improved:
+  - During recording shows elapsed seconds and estimated buffer size in MB.
+  - During non-streaming transcription shows live progress with elapsed time and ETA.
+  - After transcription briefly shows stats: words and characters.
+- Tray menu improved:
+  - Streaming chunk length can now be selected: `3s`, `8s`, `15s`.
+  - Selected chunk length is used for next and subsequent streaming sessions.

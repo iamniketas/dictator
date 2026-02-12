@@ -2,7 +2,7 @@
 
 use anyhow::Result;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use windows::core::w;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::Graphics::Gdi::HBRUSH;
@@ -21,9 +21,13 @@ use windows::Win32::UI::WindowsAndMessaging::{
 const WM_TRAYICON: u32 = WM_USER + 1;
 const ID_EXIT: u16 = 1001;
 const ID_STREAMING: u16 = 1002;
+const ID_CHUNK_3: u16 = 1003;
+const ID_CHUNK_8: u16 = 1004;
+const ID_CHUNK_15: u16 = 1005;
 
 static SHOULD_EXIT: AtomicBool = AtomicBool::new(false);
 static STREAMING_ENABLED: AtomicBool = AtomicBool::new(false);
+static STREAMING_CHUNK_SECONDS: AtomicU64 = AtomicU64::new(3);
 
 /// Check if streaming is enabled
 pub fn is_streaming_enabled() -> bool {
@@ -33,6 +37,20 @@ pub fn is_streaming_enabled() -> bool {
 /// Set streaming enabled state
 pub fn set_streaming_enabled(enabled: bool) {
     STREAMING_ENABLED.store(enabled, Ordering::SeqCst);
+}
+
+/// Get selected streaming chunk length in seconds
+pub fn streaming_chunk_seconds() -> u64 {
+    STREAMING_CHUNK_SECONDS.load(Ordering::SeqCst)
+}
+
+/// Set streaming chunk length in seconds (allowed values: 3, 8, 15)
+pub fn set_streaming_chunk_seconds(seconds: u64) {
+    let normalized = match seconds {
+        3 | 8 | 15 => seconds,
+        _ => 3,
+    };
+    STREAMING_CHUNK_SECONDS.store(normalized, Ordering::SeqCst);
 }
 
 /// Check if application should exit
@@ -72,7 +90,6 @@ pub fn run_tray() -> Result<()> {
             None,
         )?;
 
-        // Add tray icon
         let tray_icon = load_tray_icon()?;
         let nid = NOTIFYICONDATAW {
             cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
@@ -99,15 +116,12 @@ pub fn run_tray() -> Result<()> {
             return Err(anyhow::anyhow!("Failed to add tray icon"));
         }
 
-        // Message loop
         let mut msg = MSG::default();
         while GetMessageW(&mut msg, None, 0, 0).into() {
             let _ = DispatchMessageW(&msg);
         }
 
-        // Cleanup
         let _ = Shell_NotifyIconW(NIM_DELETE, &nid);
-
         Ok(())
     }
 }
@@ -162,7 +176,6 @@ unsafe extern "system" fn window_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
-    // Rust 2024 requires explicit unsafe blocks inside unsafe fn
     unsafe {
         match msg {
             WM_TRAYICON => {
@@ -177,11 +190,18 @@ unsafe extern "system" fn window_proc(
                     SHOULD_EXIT.store(true, Ordering::SeqCst);
                     PostQuitMessage(0);
                 } else if cmd == ID_STREAMING {
-                    // Toggle streaming state
                     let new_state = !STREAMING_ENABLED.load(Ordering::SeqCst);
                     STREAMING_ENABLED.store(new_state, Ordering::SeqCst);
-                    // Note: tracing logging requires setup in main, using eprintln for now
                     eprintln!("[TRAY] Streaming {}", if new_state { "enabled" } else { "disabled" });
+                } else if cmd == ID_CHUNK_3 {
+                    set_streaming_chunk_seconds(3);
+                    eprintln!("[TRAY] Streaming chunk set to 3s");
+                } else if cmd == ID_CHUNK_8 {
+                    set_streaming_chunk_seconds(8);
+                    eprintln!("[TRAY] Streaming chunk set to 8s");
+                } else if cmd == ID_CHUNK_15 {
+                    set_streaming_chunk_seconds(15);
+                    eprintln!("[TRAY] Streaming chunk set to 15s");
                 }
                 LRESULT(0)
             }
@@ -195,21 +215,47 @@ unsafe extern "system" fn window_proc(
 }
 
 unsafe fn show_context_menu(hwnd: HWND) {
-    // Rust 2024 requires explicit unsafe blocks inside unsafe fn
     unsafe {
         if let Ok(menu) = CreatePopupMenu() {
-            // Add Streaming toggle with checkmark
             let streaming_flag = if STREAMING_ENABLED.load(Ordering::SeqCst) {
                 MF_CHECKED
             } else {
                 MF_UNCHECKED
             };
-            let _ = AppendMenuW(menu, streaming_flag | MF_STRING, ID_STREAMING as usize, w!("Стриминг"));
-            
-            // Separator
+            let _ = AppendMenuW(
+                menu,
+                streaming_flag | MF_STRING,
+                ID_STREAMING as usize,
+                w!("Streaming"),
+            );
+
+            let selected_chunk = STREAMING_CHUNK_SECONDS.load(Ordering::SeqCst);
+            let chunk_3_flag = if selected_chunk == 3 {
+                MF_CHECKED
+            } else {
+                MF_UNCHECKED
+            };
+            let chunk_8_flag = if selected_chunk == 8 {
+                MF_CHECKED
+            } else {
+                MF_UNCHECKED
+            };
+            let chunk_15_flag = if selected_chunk == 15 {
+                MF_CHECKED
+            } else {
+                MF_UNCHECKED
+            };
+
+            let _ = AppendMenuW(menu, chunk_3_flag | MF_STRING, ID_CHUNK_3 as usize, w!("Chunk: 3s"));
+            let _ = AppendMenuW(menu, chunk_8_flag | MF_STRING, ID_CHUNK_8 as usize, w!("Chunk: 8s"));
+            let _ = AppendMenuW(
+                menu,
+                chunk_15_flag | MF_STRING,
+                ID_CHUNK_15 as usize,
+                w!("Chunk: 15s"),
+            );
+
             let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
-            
-            // Exit
             let _ = AppendMenuW(menu, MF_STRING, ID_EXIT as usize, w!("Exit"));
 
             let mut pt = Default::default();
