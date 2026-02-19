@@ -153,6 +153,26 @@ dictator/
 - [ ] macOS/Linux support
 - [ ] Embedded Whisper (replace HTTP server with direct Rust binding)
 
+## Cross-Platform Expansion (Windows + macOS)
+
+The repository is now evolving toward a multi-platform setup with a native macOS client.
+
+- macOS implementation roadmap: [`docs/MACOS_ROADMAP.md`](docs/MACOS_ROADMAP.md)
+- Safe repository evolution plan (without breaking Windows): [`docs/REPO_STRUCTURE_PLAN.md`](docs/REPO_STRUCTURE_PLAN.md)
+- Shared contracts: [`shared/contracts/README.md`](shared/contracts/README.md)
+
+Short-term strategy:
+
+1. Keep current Windows Rust app stable in place.
+2. Build native macOS app in parallel (`SwiftUI + AppKit`).
+3. Migrate to final monorepo layout only after CI gates are green for both platforms.
+
+## New Directories (Iteration)
+
+- `apps/macos` — native macOS skeleton app (`SwiftUI + AppKit`).
+- `.github/workflows/windows.yml` — baseline CI for Windows Rust app.
+- `shared/contracts` — cross-platform machine-readable contracts.
+
 ## License
 
 Apache 2.0 — see [LICENSE](LICENSE) file for details

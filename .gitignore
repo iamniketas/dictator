@@ -1,5 +1,7 @@
 # Build artifacts
 target/
+.build/
+**/.build/
 *.rs.bk
 Cargo.lock
 
@@ -32,3 +34,9 @@ orchestrator.db
 __pycache__/
 .orchestrator/
 examples/
+
+# Local Whisper models (keep lightweight docs only)
+models/**
+!models/
+!models/**/
+!models/**/README.md
