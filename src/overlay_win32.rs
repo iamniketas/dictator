@@ -29,7 +29,7 @@ pub struct OverlayConfig {
 impl Default for OverlayConfig {
     fn default() -> Self {
         Self {
-            width: 800,
+            width: 900,
             height: 120,
             font_size: 24,
             text_color: (245, 245, 245), // Higher contrast text
@@ -256,7 +256,7 @@ impl OverlayApp {
                     let mut status_rect = RECT {
                         left: left_margin,
                         top: 8,
-                        right: config.width as i32 - 20,
+                        right: config.width as i32 - 10,
                         bottom: 38,
                     };
                     DrawTextW(
@@ -280,7 +280,7 @@ impl OverlayApp {
                     let mut body_rect = RECT {
                         left: left_margin,
                         top: if status_text.is_empty() { 10 } else { 42 },
-                        right: config.width as i32 - 20,
+                        right: config.width as i32 - 10,
                         bottom: config.height as i32 - 10,
                     };
                     DrawTextW(mem_dc, &mut body_utf16, &mut body_rect, DT_LEFT | DT_TOP | DT_WORDBREAK);
