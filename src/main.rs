@@ -9,6 +9,7 @@ use tracing::{error, info, warn};
 
 use dictator::audio::AudioRecorder;
 use dictator::config::Config;
+use dictator::history::HistoryManager;
 use dictator::input::{self, HotkeyEvent};
 use dictator::llm::OllamaClient;
 use dictator::overlay_win32::{OverlayConfig, OverlayWindow};
@@ -62,7 +63,7 @@ fn format_transcribing_status(
 fn main() -> Result<()> {
     // Initialize logging to file
     let log_dir = dirs::data_dir()
-        .unwrap_or_else(|| std::env::temp_dir())
+        .unwrap_or_else(std::env::temp_dir)
         .join("dictator")
         .join("logs");
 
@@ -112,6 +113,53 @@ fn main() -> Result<()> {
     let overlay_config = OverlayConfig::default();
     let overlay = Arc::new(OverlayWindow::new(overlay_config)?);
 
+    // Create history manager
+    let history = Arc::new(HistoryManager::new(config.history.retention_days)?);
+    info!("[MAIN] History manager created, enabled: {}", config.history.enabled);
+
+    // Set up history callbacks for tray menu
+    let history_for_open = history.clone();
+    ui::set_history_open_callback(move || {
+        if let Err(e) = history_for_open.open_folder() {
+            error!("[MAIN] Failed to open history folder: {}", e);
+        }
+    });
+
+    // Callback to get recent recordings for menu
+    let history_for_entries = history.clone();
+    ui::set_history_entries_callback(move || {
+        let recordings = history_for_entries.get_recent_recordings(10);
+        recordings
+            .into_iter()
+            .enumerate()
+            .map(|(idx, rec)| {
+                let time = &rec.metadata.datetime[11..16]; // HH:MM
+                let preview = if rec.metadata.text_preview.len() > 35 {
+                    format!("{}...", &rec.metadata.text_preview[..35])
+                } else {
+                    rec.metadata.text_preview.clone()
+                };
+                ui::HistoryMenuEntry {
+                    id: idx,
+                    label: format!("[{}] {}", time, preview),
+                }
+            })
+            .collect()
+    });
+
+    // Callback to copy recording to clipboard
+    let history_for_copy = history.clone();
+    ui::set_history_copy_callback(move |index| {
+        let recordings = history_for_copy.get_recent_recordings(10);
+        if let Some(recording) = recordings.get(index) {
+            if let Err(e) = history_for_copy.copy_to_clipboard(recording) {
+                error!("[MAIN] Failed to copy recording to clipboard: {}", e);
+            } else {
+                info!("[MAIN] Copied recording {} to clipboard", recording.id);
+            }
+        }
+    });
+
     // Start hotkey listener
     let (tx, rx) = mpsc::channel();
     let _hotkey_handle = input::start_hotkey_listener(tx);
@@ -125,8 +173,10 @@ fn main() -> Result<()> {
     let overlay_clone = overlay.clone();
     let config_clone = config.clone();
     let streaming_tx_clone = streaming_tx.clone();
+    let history_clone = history.clone();
 
     std::thread::spawn(move || {
+        let history = history_clone;
         let mut saved_hwnd: Option<isize> = None;
         let mut is_recording = false;
         let mut streaming_transcriber: Option<StreamingTranscriber> = None;
@@ -159,37 +209,37 @@ fn main() -> Result<()> {
                     Some(evt)
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {
-                    if is_recording {
-                        if let Some(started_at) = recording_started_at {
-                            let elapsed = started_at.elapsed();
-                            let elapsed_sec = elapsed.as_secs();
-                            if elapsed_sec != last_recording_second {
-                                last_recording_second = elapsed_sec;
-                                if !whisper_ready {
-                                    match whisper_manager.poll_ready() {
-                                        Ok(true) => {
-                                            whisper_ready = true;
-                                            whisper_status_text = "Whisper: ready".to_string();
-                                        }
-                                        Ok(false) => {
-                                            whisper_status_text = "Whisper: starting...".to_string();
-                                        }
-                                        Err(e) => {
-                                            whisper_status_text = "Whisper: startup error".to_string();
-                                            warn!("[MAIN] Whisper poll error: {}", e);
-                                        }
+                    if is_recording
+                        && let Some(started_at) = recording_started_at
+                    {
+                        let elapsed = started_at.elapsed();
+                        let elapsed_sec = elapsed.as_secs();
+                        if elapsed_sec != last_recording_second {
+                            last_recording_second = elapsed_sec;
+                            if !whisper_ready {
+                                match whisper_manager.poll_ready() {
+                                    Ok(true) => {
+                                        whisper_ready = true;
+                                        whisper_status_text = "Whisper: ready".to_string();
+                                    }
+                                    Ok(false) => {
+                                        whisper_status_text = "Whisper: starting...".to_string();
+                                    }
+                                    Err(e) => {
+                                        whisper_status_text = "Whisper: startup error".to_string();
+                                        warn!("[MAIN] Whisper poll error: {}", e);
                                     }
                                 }
-                                let streaming_enabled = ui::is_streaming_enabled();
-                                let chunk_seconds = ui::streaming_chunk_seconds();
-                                let status = format_recording_status(
-                                    elapsed,
-                                    streaming_enabled,
-                                    chunk_seconds,
-                                    &whisper_status_text,
-                                );
-                                overlay_clone.update_status_text(&status);
                             }
+                            let streaming_enabled = ui::is_streaming_enabled();
+                            let chunk_seconds = ui::streaming_chunk_seconds();
+                            let status = format_recording_status(
+                                elapsed,
+                                streaming_enabled,
+                                chunk_seconds,
+                                &whisper_status_text,
+                            );
+                            overlay_clone.update_status_text(&status);
                         }
                     }
                     // No hotkey event, continue to check streaming events and recording progress
@@ -512,6 +562,21 @@ fn main() -> Result<()> {
                     std::thread::sleep(std::time::Duration::from_secs(2));
                     overlay_clone.hide();
                     whisper_manager.stop_if_owned();
+
+                    // Save recording to history (if enabled)
+                    if config_clone.history.enabled {
+                        let duration_secs = audio_data.len() as f32 / 16000.0;
+                        let mode = if ui::is_streaming_enabled() { "streaming" } else { "full" };
+                        if let Err(e) = history.save_recording(
+                            &audio_data,
+                            &final_text,
+                            duration_secs,
+                            mode,
+                            &config_clone.whisper.language,
+                        ) {
+                            error!("[MAIN] Failed to save recording to history: {}", e);
+                        }
+                    }
 
                     // Reset accumulated text for next recording
                     accumulated_text.clear();

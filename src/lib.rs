@@ -4,6 +4,7 @@
 
 pub mod audio;
 pub mod config;
+pub mod history;
 pub mod transcribe;
 pub mod llm;
 pub mod ui;

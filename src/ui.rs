@@ -14,7 +14,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DispatchMessageW,
     GetCursorPos, GetMessageW, LoadIconW, LoadImageW, PostQuitMessage, RegisterClassW,
     SetForegroundWindow, TrackPopupMenu, CS_HREDRAW, CS_VREDRAW, IDI_APPLICATION, IMAGE_ICON,
-    LR_LOADFROMFILE, MF_CHECKED, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MSG, TPM_BOTTOMALIGN,
+    LR_LOADFROMFILE, MF_CHECKED, MF_GRAYED, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MSG, TPM_BOTTOMALIGN,
     TPM_LEFTALIGN, WM_COMMAND, WM_DESTROY, WM_RBUTTONUP, WM_USER, WNDCLASSW, WS_OVERLAPPEDWINDOW,
 };
 
@@ -24,10 +24,55 @@ const ID_STREAMING: u16 = 1002;
 const ID_CHUNK_3: u16 = 1003;
 const ID_CHUNK_8: u16 = 1004;
 const ID_CHUNK_15: u16 = 1005;
+const ID_OPEN_HISTORY: u16 = 1006;
+const ID_HISTORY_START: u16 = 1100; // Start of dynamic history IDs (1100-1199)
+const ID_HISTORY_END: u16 = 1199;
 
 static SHOULD_EXIT: AtomicBool = AtomicBool::new(false);
 static STREAMING_ENABLED: AtomicBool = AtomicBool::new(false);
 static STREAMING_CHUNK_SECONDS: AtomicU64 = AtomicU64::new(15);
+
+// History callbacks
+static HISTORY_OPEN_CALLBACK: std::sync::Mutex<Option<Box<dyn Fn() + Send + 'static>>> = std::sync::Mutex::new(None);
+static HISTORY_COPY_CALLBACK: std::sync::Mutex<Option<Box<dyn Fn(usize) + Send + 'static>>> = std::sync::Mutex::new(None);
+static HISTORY_GET_ENTRIES_CALLBACK: std::sync::Mutex<Option<Box<dyn Fn() -> Vec<HistoryMenuEntry> + Send + 'static>>> = std::sync::Mutex::new(None);
+
+/// Entry for history menu
+#[derive(Debug, Clone)]
+pub struct HistoryMenuEntry {
+    pub id: usize,  // 0-based index
+    pub label: String,
+}
+
+/// Set the callback for opening history folder
+pub fn set_history_open_callback<F>(callback: F)
+where
+    F: Fn() + Send + 'static,
+{
+    if let Ok(mut cb) = HISTORY_OPEN_CALLBACK.lock() {
+        *cb = Some(Box::new(callback));
+    }
+}
+
+/// Set the callback for copying history entry
+pub fn set_history_copy_callback<F>(callback: F)
+where
+    F: Fn(usize) + Send + 'static,
+{
+    if let Ok(mut cb) = HISTORY_COPY_CALLBACK.lock() {
+        *cb = Some(Box::new(callback));
+    }
+}
+
+/// Set the callback for getting history entries
+pub fn set_history_entries_callback<F>(callback: F)
+where
+    F: Fn() -> Vec<HistoryMenuEntry> + Send + 'static,
+{
+    if let Ok(mut cb) = HISTORY_GET_ENTRIES_CALLBACK.lock() {
+        *cb = Some(Box::new(callback));
+    }
+}
 
 /// Check if streaming is enabled
 pub fn is_streaming_enabled() -> bool {
@@ -69,7 +114,7 @@ pub fn run_tray() -> Result<()> {
             lpfnWndProc: Some(window_proc),
             hInstance: instance.into(),
             lpszClassName: class_name,
-            hbrBackground: HBRUSH(0 as *mut _),
+            hbrBackground: HBRUSH(std::ptr::null_mut()),
             ..Default::default()
         };
 
@@ -131,14 +176,14 @@ fn load_tray_icon() -> Result<windows::Win32::UI::WindowsAndMessaging::HICON> {
     if let Ok(cwd) = std::env::current_dir() {
         candidates.push(cwd.join("assets").join("dictator.ico"));
     }
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(exe_dir) = exe.parent() {
-            candidates.push(exe_dir.join("assets").join("dictator.ico"));
-            if let Some(parent) = exe_dir.parent() {
-                candidates.push(parent.join("assets").join("dictator.ico"));
-                if let Some(grand) = parent.parent() {
-                    candidates.push(grand.join("assets").join("dictator.ico"));
-                }
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(exe_dir) = exe.parent()
+    {
+        candidates.push(exe_dir.join("assets").join("dictator.ico"));
+        if let Some(parent) = exe_dir.parent() {
+            candidates.push(parent.join("assets").join("dictator.ico"));
+            if let Some(grand) = parent.parent() {
+                candidates.push(grand.join("assets").join("dictator.ico"));
             }
         }
     }
@@ -202,6 +247,21 @@ unsafe extern "system" fn window_proc(
                 } else if cmd == ID_CHUNK_15 {
                     set_streaming_chunk_seconds(15);
                     eprintln!("[TRAY] Streaming chunk set to 15s");
+                } else if cmd == ID_OPEN_HISTORY {
+                    eprintln!("[TRAY] Opening history folder");
+                    if let Ok(cb) = HISTORY_OPEN_CALLBACK.lock() {
+                        if let Some(ref callback) = *cb {
+                            callback();
+                        }
+                    }
+                } else if cmd >= ID_HISTORY_START && cmd <= ID_HISTORY_END {
+                    let index = (cmd - ID_HISTORY_START) as usize;
+                    eprintln!("[TRAY] Copying history entry {}", index);
+                    if let Ok(cb) = HISTORY_COPY_CALLBACK.lock() {
+                        if let Some(ref callback) = *cb {
+                            callback(index);
+                        }
+                    }
                 }
                 LRESULT(0)
             }
@@ -255,6 +315,39 @@ unsafe fn show_context_menu(hwnd: HWND) {
                 w!("Chunk: 15s"),
             );
 
+            // Add Recent Recordings submenu
+            let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
+            
+            // Get history entries
+            let history_entries = if let Ok(cb) = HISTORY_GET_ENTRIES_CALLBACK.lock() {
+                if let Some(ref callback) = *cb {
+                    callback()
+                } else {
+                    Vec::new()
+                }
+            } else {
+                Vec::new()
+            };
+
+            if history_entries.is_empty() {
+                let _ = AppendMenuW(menu, MF_GRAYED | MF_STRING, 0, w!("No recent recordings"));
+            } else {
+                let _ = AppendMenuW(menu, MF_STRING, 0, w!("Recent (click to copy):"));
+                for entry in history_entries.iter().take(10) {
+                    let menu_id = ID_HISTORY_START + entry.id as u16;
+                    // Convert label to wide string
+                    let wide_label: Vec<u16> = entry.label.encode_utf16().chain(std::iter::once(0)).collect();
+                    let _ = AppendMenuW(
+                        menu,
+                        MF_STRING,
+                        menu_id as usize,
+                        windows::core::PCWSTR(wide_label.as_ptr()),
+                    );
+                }
+            }
+
+            let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
+            let _ = AppendMenuW(menu, MF_STRING, ID_OPEN_HISTORY as usize, w!("Open Recordings Folder"));
             let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
             let _ = AppendMenuW(menu, MF_STRING, ID_EXIT as usize, w!("Exit"));
 

@@ -46,6 +46,12 @@ dirs = "5.0"
 # Clipboard
 clipboard-win = "4.5"
 
+# WAV audio writing
+hound = "3.5"
+
+# Date/time handling
+chrono = "0.4"
+
 # Overlay
 winit = "0.30"
 softbuffer = "0.4"

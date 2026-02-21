@@ -14,6 +14,34 @@ pub struct Config {
     pub ollama: OllamaConfig,
     #[serde(default)]
     pub streaming: StreamingConfig,
+    #[serde(default)]
+    pub history: HistoryConfig,
+}
+
+/// History storage configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HistoryConfig {
+    /// Enable saving transcriptions and audio to disk (default: true)
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Days to keep history files before auto-cleanup (default: 7)
+    #[serde(default = "default_retention_days")]
+    pub retention_days: u32,
+    /// Max entries to show in tray menu (default: 5)
+    #[serde(default = "default_max_recent")]
+    pub max_recent: usize,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_retention_days() -> u32 {
+    7
+}
+
+fn default_max_recent() -> usize {
+    5
 }
 
 /// Streaming configuration
@@ -85,6 +113,7 @@ impl Default for Config {
                 enabled: false, // Disabled by default - safer
                 poll_interval: default_streaming_poll_interval(),
             },
+            history: HistoryConfig::default(),
         }
     }
 }
@@ -94,6 +123,16 @@ impl Default for StreamingConfig {
         Self {
             enabled: false,
             poll_interval: default_streaming_poll_interval(),
+        }
+    }
+}
+
+impl Default for HistoryConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_true(),
+            retention_days: default_retention_days(),
+            max_recent: default_max_recent(),
         }
     }
 }

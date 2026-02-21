@@ -40,3 +40,7 @@ models/**
 !models/
 !models/**/
 !models/**/README.md
+
+# Recordings (audio + transcriptions) - stored locally, never committed
+recordings/
+!recordings/.gitkeep
