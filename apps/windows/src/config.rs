@@ -97,6 +97,20 @@ pub struct AudioConfig {
     pub sample_rate: u32,
 }
 
+/// Whisper inference backend
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum WhisperBackend {
+    /// Embedded whisper.cpp via whisper-rs (default).
+    /// Uses GGML .bin model files. No Python or external server required.
+    /// GPU acceleration available via `--features cuda` at build time.
+    #[default]
+    Embedded,
+    /// Legacy Python HTTP server (faster-whisper / CTranslate2 format).
+    /// Requires `whisper_server.py` and Python environment.
+    Server,
+}
+
 /// Whisper configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WhisperConfig {
@@ -106,6 +120,9 @@ pub struct WhisperConfig {
     /// If not set, defaults to the parent of model_path.
     #[serde(default)]
     pub models_dir: Option<PathBuf>,
+    /// Inference backend: "embedded" (default) or "server" (legacy Python).
+    #[serde(default)]
+    pub backend: WhisperBackend,
 }
 
 impl WhisperConfig {
@@ -190,6 +207,7 @@ impl Default for Config {
                 model_path: PathBuf::from("models/ggml-large-v3.bin"),
                 language: "ru".into(),
                 models_dir: None,
+                backend: WhisperBackend::Embedded,
             },
             ollama: OllamaConfig {
                 enabled: false, // Disabled by default for speed
@@ -307,6 +325,7 @@ model = "glm-4.7-flash"
             model_path: PathBuf::from("models/ggml-large-v3.bin"),
             language: "ru".into(),
             models_dir: None,
+            backend: WhisperBackend::Embedded,
         };
         let dir = whisper.effective_models_dir();
         unsafe { std::env::remove_var("WHISPER_MODELS_DIR") };

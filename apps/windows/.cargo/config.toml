@@ -1,0 +1,8 @@
+# Build configuration for Windows
+#
+# whisper-rs-sys uses bindgen which requires libclang.dll.
+# Visual Studio 2022 ships with LLVM/Clang — point bindgen to it.
+# If you have LLVM installed separately, set LIBCLANG_PATH in your environment instead.
+
+[env]
+LIBCLANG_PATH = { value = "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\Llvm\\x64\\bin", force = false }

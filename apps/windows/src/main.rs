@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use tracing::{error, info, warn};
 
 use dictator::audio::AudioRecorder;
-use dictator::config::Config;
+use dictator::config::{Config, WhisperBackend};
 use dictator::history::HistoryManager;
 use dictator::input::{self, HotkeyEvent};
 use dictator::llm::OllamaClient;
@@ -19,6 +19,7 @@ use dictator::streaming::{StreamingEvent, StreamingTranscriber};
 use dictator::transcribe;
 use dictator::ui;
 use dictator::ui::ModelMenuItem;
+use dictator::whisper_engine::{self, SharedEngine};
 use dictator::whisper_server::WhisperServerManager;
 use windows::Win32::Foundation::CloseHandle;
 use windows::Win32::System::Threading::{
@@ -208,21 +209,46 @@ fn scan_available_models(config: &Config) -> Vec<ModelMenuItem> {
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_default();
 
+    let is_embedded = config.whisper.backend == WhisperBackend::Embedded;
+
     let mut models: Vec<ModelMenuItem> = entries
         .flatten()
-        .filter(|e| e.path().is_dir())
+        .filter(|e| {
+            let path = e.path();
+            if is_embedded {
+                // Embedded: GGML .bin files
+                path.is_file()
+                    && path.extension().map(|ext| ext == "bin").unwrap_or(false)
+            } else {
+                // Server (legacy): CTranslate2 model directories
+                path.is_dir()
+            }
+        })
         .enumerate()
         .map(|(i, e)| {
             let path = e.path();
             let name = e.file_name().to_string_lossy().to_string();
             let is_current = name == current_name;
-            let size_label = model_dir_size_label(&path);
+            let size_label = if is_embedded {
+                // For .bin files, use the file size directly
+                std::fs::metadata(&path)
+                    .map(|m| {
+                        let gb = m.len() as f64 / (1024.0 * 1024.0 * 1024.0);
+                        if gb >= 0.1 {
+                            format!(" ({:.1} GB)", gb)
+                        } else {
+                            format!(" ({:.0} MB)", m.len() as f64 / (1024.0 * 1024.0))
+                        }
+                    })
+                    .unwrap_or_default()
+            } else {
+                model_dir_size_label(&path)
+            };
             ModelMenuItem { index: i, name, is_current, size_label }
         })
         .collect();
 
     models.sort_by(|a, b| a.name.cmp(&b.name));
-    // Re-assign indices after sort
     for (i, m) in models.iter_mut().enumerate() {
         m.index = i;
     }
@@ -317,6 +343,9 @@ fn main() -> Result<()> {
         info!("Ollama correction disabled (can be enabled from tray menu)");
     }
 
+    // Create embedded whisper engine (lazy — model loads on first transcription)
+    let shared_engine: SharedEngine = whisper_engine::new_shared_engine();
+
     // Create shared audio recorder
     let recorder = Arc::new(AudioRecorder::new()?);
 
@@ -399,6 +428,8 @@ fn main() -> Result<()> {
                 error!("[MAIN] Failed to save config after model switch: {}", e);
             } else {
                 info!("[MAIN] Switched model to: {}", model.name);
+                // For embedded backend, the engine must be reloaded on next use
+                // (whisper_manager restart handled separately for server backend)
             }
         }
     });
@@ -420,6 +451,7 @@ fn main() -> Result<()> {
     let config_clone = config.clone();
     let streaming_tx_clone = streaming_tx.clone();
     let history_clone = history.clone();
+    let engine_clone = shared_engine.clone();
 
     std::thread::spawn(move || {
         let history = history_clone;
@@ -436,6 +468,8 @@ fn main() -> Result<()> {
         let mut whisper_status_text = String::from("Whisper: idle");
         let mut last_transcription_time: Option<Instant> = None;
         let idle_unload_minutes = config_clone.memory.idle_unload_minutes;
+        let is_embedded = config_clone.whisper.backend == WhisperBackend::Embedded;
+        let engine = engine_clone;
         let mut whisper_manager = WhisperServerManager::new(
             config_clone
                 .whisper
@@ -466,7 +500,7 @@ fn main() -> Result<()> {
                         let elapsed_sec = elapsed.as_secs();
                         if elapsed_sec != last_recording_second {
                             last_recording_second = elapsed_sec;
-                            if !whisper_ready {
+                            if !whisper_ready && !is_embedded {
                                 match whisper_manager.poll_ready() {
                                     Ok(true) => {
                                         whisper_ready = true;
@@ -495,13 +529,21 @@ fn main() -> Result<()> {
                             overlay_clone.update_status_text(&status);
                         }
                     }
-                    // Idle unload: stop whisper server after N minutes of inactivity
+                    // Idle unload: free model memory after N minutes of inactivity
                     if idle_unload_minutes > 0 && !is_recording {
                         if let Some(last) = last_transcription_time {
                             if last.elapsed() >= Duration::from_secs(idle_unload_minutes as u64 * 60) {
-                                if whisper_manager.is_server_running() {
+                                if is_embedded {
+                                    if whisper_engine::is_engine_loaded(&engine) {
+                                        info!(
+                                            "[MAIN] Idle timeout ({} min): unloading embedded engine",
+                                            idle_unload_minutes
+                                        );
+                                        whisper_engine::unload_engine(&engine);
+                                    }
+                                } else if whisper_manager.is_server_running() {
                                     info!(
-                                        "[MAIN] Idle timeout ({} min): unloading whisper server",
+                                        "[MAIN] Idle timeout ({} min): stopping whisper server",
                                         idle_unload_minutes
                                     );
                                     whisper_manager.stop_if_owned();
@@ -603,14 +645,24 @@ fn main() -> Result<()> {
                             &whisper_status_text,
                         ));
 
-                        whisper_ready = WhisperServerManager::is_healthy();
-                        if whisper_ready {
-                            whisper_status_text = "Whisper: ready".to_string();
+                        if is_embedded {
+                            // Embedded: model loads lazily on first transcription
+                            whisper_ready = whisper_engine::is_engine_loaded(&engine);
+                            whisper_status_text = if whisper_ready {
+                                "Whisper: ready (embedded)".to_string()
+                            } else {
+                                "Whisper: will load on stop".to_string()
+                            };
                         } else {
-                            whisper_status_text = "Whisper: starting...".to_string();
-                            if let Err(e) = whisper_manager.start_if_needed() {
-                                warn!("[MAIN] Whisper server warmup start failed: {}", e);
-                                whisper_status_text = "Whisper: startup error".to_string();
+                            whisper_ready = WhisperServerManager::is_healthy();
+                            if whisper_ready {
+                                whisper_status_text = "Whisper: ready".to_string();
+                            } else {
+                                whisper_status_text = "Whisper: starting...".to_string();
+                                if let Err(e) = whisper_manager.start_if_needed() {
+                                    warn!("[MAIN] Whisper server warmup start failed: {}", e);
+                                    whisper_status_text = "Whisper: startup error".to_string();
+                                }
                             }
                         }
                         overlay_clone.update_status_text(&format_recording_status(
@@ -639,11 +691,21 @@ fn main() -> Result<()> {
                             accumulated_text.clear();
                             let chunk_seconds = ui::streaming_chunk_seconds();
                             info!("[MAIN] Streaming chunk duration: {}s", chunk_seconds);
-                            streaming_transcriber = Some(StreamingTranscriber::new(
-                                streaming_tx_clone.clone(),
-                                config_clone.whisper.language.clone(),
-                                chunk_seconds,
-                            ));
+                            streaming_transcriber = Some(if is_embedded {
+                                StreamingTranscriber::new_embedded(
+                                    streaming_tx_clone.clone(),
+                                    config_clone.whisper.language.clone(),
+                                    chunk_seconds,
+                                    engine.clone(),
+                                    config_clone.whisper.model_path.clone(),
+                                )
+                            } else {
+                                StreamingTranscriber::new(
+                                    streaming_tx_clone.clone(),
+                                    config_clone.whisper.language.clone(),
+                                    chunk_seconds,
+                                )
+                            });
                             if let Some(ref mut st) = streaming_transcriber {
                                 st.start(recorder_clone.clone());
                             }
@@ -719,7 +781,9 @@ fn main() -> Result<()> {
                         }
                         Err(e) => {
                             error!("[MAIN] FAILED to stop recording: {}", e);
-                            whisper_manager.stop_if_owned();
+                            if !is_embedded {
+                                whisper_manager.stop_if_owned();
+                            }
                             continue;
                         }
                     };
@@ -738,13 +802,15 @@ fn main() -> Result<()> {
                         );
                         accumulated_text.clone()
                     } else {
-                        if let Err(e) = whisper_manager.ensure_running(Duration::from_secs(30)) {
-                            error!("[MAIN] Failed to start Whisper server: {}", e);
-                            overlay_clone.show("Whisper server startup error");
-                            std::thread::sleep(Duration::from_secs(2));
-                            overlay_clone.hide();
-                            whisper_manager.stop_if_owned();
-                            continue;
+                        if !is_embedded {
+                            if let Err(e) = whisper_manager.ensure_running(Duration::from_secs(30)) {
+                                error!("[MAIN] Failed to start Whisper server: {}", e);
+                                overlay_clone.show("Whisper server startup error");
+                                std::thread::sleep(Duration::from_secs(2));
+                                overlay_clone.hide();
+                                whisper_manager.stop_if_owned();
+                                continue;
+                            }
                         }
 
                         overlay_clone.update_status_text("Transcribing...");
@@ -756,8 +822,19 @@ fn main() -> Result<()> {
                         let audio_for_transcribe = audio_data.clone();
                         let (transcribe_tx, transcribe_rx) = mpsc::channel();
 
+                        let engine_for_transcribe = engine.clone();
+                        let model_path_for_transcribe = config_clone.whisper.model_path.clone();
                         std::thread::spawn(move || {
-                            let result = transcribe::transcribe_audio(&audio_for_transcribe, &language);
+                            let result = if is_embedded {
+                                whisper_engine::transcribe_with_engine(
+                                    &engine_for_transcribe,
+                                    &model_path_for_transcribe,
+                                    &audio_for_transcribe,
+                                    &language,
+                                )
+                            } else {
+                                transcribe::transcribe_audio(&audio_for_transcribe, &language)
+                            };
                             let _ = transcribe_tx.send(result);
                         });
 
@@ -811,7 +888,9 @@ fn main() -> Result<()> {
                             Err(e) => {
                                 error!("Transcription error: {}", e);
                                 overlay_clone.hide();
-                                whisper_manager.stop_if_owned();
+                                if !is_embedded {
+                                    whisper_manager.stop_if_owned();
+                                }
                                 continue;
                             }
                         }

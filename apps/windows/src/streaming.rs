@@ -2,7 +2,9 @@
 //!
 //! This is a simplified version without async/tokio to avoid threading issues.
 //! Uses simple thread::sleep with configurable chunk length.
+//! Supports both embedded (whisper-rs) and legacy HTTP server backends.
 
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
 use std::thread::{self, JoinHandle};
@@ -11,6 +13,7 @@ use tracing::{error, info, warn};
 
 use crate::audio::AudioRecorder;
 use crate::transcribe::transcribe_audio;
+use crate::whisper_engine::{transcribe_with_engine, SharedEngine};
 
 /// Events from streaming transcription
 #[derive(Debug, Clone)]
@@ -35,10 +38,14 @@ pub struct StreamingTranscriber {
     language: String,
     /// Chunk duration for polling/transcription
     chunk_duration_secs: u64,
+    /// Embedded engine (Some = embedded backend, None = HTTP server backend)
+    engine: Option<SharedEngine>,
+    /// Model path (used when engine is Some)
+    model_path: PathBuf,
 }
 
 impl StreamingTranscriber {
-    /// Create new streaming transcriber
+    /// Create new streaming transcriber using the HTTP server backend (legacy).
     pub fn new(
         event_tx: mpsc::Sender<StreamingEvent>,
         language: String,
@@ -50,6 +57,27 @@ impl StreamingTranscriber {
             thread_handle: None,
             language,
             chunk_duration_secs: chunk_duration_secs.max(1),
+            engine: None,
+            model_path: PathBuf::new(),
+        }
+    }
+
+    /// Create new streaming transcriber using the embedded whisper-rs backend.
+    pub fn new_embedded(
+        event_tx: mpsc::Sender<StreamingEvent>,
+        language: String,
+        chunk_duration_secs: u64,
+        engine: SharedEngine,
+        model_path: PathBuf,
+    ) -> Self {
+        Self {
+            event_tx,
+            stop_signal: Arc::new(AtomicBool::new(false)),
+            thread_handle: None,
+            language,
+            chunk_duration_secs: chunk_duration_secs.max(1),
+            engine: Some(engine),
+            model_path,
         }
     }
 
@@ -70,6 +98,8 @@ impl StreamingTranscriber {
         let language = self.language.clone();
         let chunk_duration_secs = self.chunk_duration_secs;
         let chunk_duration = Duration::from_secs(chunk_duration_secs);
+        let engine = self.engine.clone();
+        let model_path = self.model_path.clone();
 
         // Spawn simple thread with sleep-based polling
         let handle = thread::spawn(move || {
@@ -179,7 +209,11 @@ impl StreamingTranscriber {
                 }
 
                 // Send to Whisper (blocking call, but in separate thread)
-                match transcribe_audio(audio_to_process, &language) {
+                let transcribe_result = match &engine {
+                    Some(eng) => transcribe_with_engine(eng, &model_path, audio_to_process, &language),
+                    None => transcribe_audio(audio_to_process, &language),
+                };
+                match transcribe_result {
                     Ok(partial_text) => {
                         if !partial_text.is_empty() {
                             // Append with space

@@ -3,7 +3,15 @@ name = "dictator"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+# Enable GPU acceleration via CUDA (requires CUDA Toolkit installed)
+# Build with: cargo build --features cuda
+cuda = ["whisper-rs/cuda"]
+
 [dependencies]
+# Embedded Whisper inference (whisper.cpp bindings, no Python required)
+# Models: download GGML .bin from https://huggingface.co/ggerganov/whisper.cpp
+whisper-rs = { version = "0.14", default-features = false }
 # Windows API
 windows = { version = "0.58", features = [
     "Win32_Foundation",

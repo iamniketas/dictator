@@ -110,10 +110,40 @@
   - Distil-Whisper (faster, lower quality)
 - Metrics: latency, WER (word error rate), VRAM usage, CPU usage
 
-### D3: Embedded Whisper (whisper-rs)
-- Replace HTTP server with direct Rust binding
-- Eliminates Python dependency on Windows
-- Requires VS 2022 with C++ toolchain
+### D3: Embedded Whisper (whisper-rs) ✅ DONE (2026-03-06)
+
+**New default backend — no Python required.**
+
+#### Architecture
+- `whisper_engine.rs`: new module wrapping `whisper-rs 0.14`
+- `SharedEngine = Arc<Mutex<Option<WhisperEngine>>>` — lazy load, idle unload
+- `config.whisper.backend`: `"embedded"` (default) | `"server"` (legacy Python)
+
+#### Changes
+- `whisper_engine.rs`: `WhisperEngine::load()`, `transcribe()`, `SharedEngine` helpers
+- `config.rs`: `WhisperBackend` enum, added to `WhisperConfig`
+- `streaming.rs`: `StreamingTranscriber::new_embedded()` for embedded path
+- `main.rs`: engine creation, backend-aware transcription, idle timer uses `unload_engine()`
+- Model scan: `.bin` files for embedded, directories for server (legacy CTranslate2)
+- `.cargo/config.toml`: `LIBCLANG_PATH` pointed to VS 2022 LLVM (for bindgen)
+
+#### Prerequisites
+- **Model**: download GGML `.bin` from https://huggingface.co/ggerganov/whisper.cpp
+  - Place in `%LocalAppData%\whisper-models\` (shared with Contora)
+  - Example: `ggml-large-v3.bin`, `ggml-medium.bin`
+- **GPU**: build with `cargo build --features cuda` (requires CUDA Toolkit)
+- **CPU**: default build, no extra dependencies
+
+#### Migration from faster-whisper (server backend)
+Add to `config.toml`:
+```toml
+[whisper]
+backend = "server"  # keep using Python HTTP server
+```
+Or switch to embedded (recommended):
+1. Download GGML model to `%LocalAppData%\whisper-models\`
+2. Set `model_path` to the `.bin` file path
+3. Remove or leave `backend = "embedded"` (it's the default)
 
 ---
 
@@ -201,5 +231,5 @@
 6. **Sprint E** (Windows quality of life) ✅ DONE
 7. **Sprint F** (UX polish) ✅ DONE
 8. **Sprint G** (CLI remote control + About) ✅ DONE
-9. **Sprint D1-D2** (model research) — informs future architecture
-10. **Sprint D3** (embedded whisper-rs) — eliminates Python dependency
+9. **Sprint D3** (embedded whisper-rs) ✅ DONE
+10. **Sprint D1-D2** (model research) — informs future architecture
