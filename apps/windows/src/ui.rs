@@ -14,9 +14,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DispatchMessageW,
     GetCursorPos, GetMessageW, LoadIconW, LoadImageW, MessageBoxW, PostQuitMessage, RegisterClassW,
     SetForegroundWindow, TrackPopupMenu, CS_HREDRAW, CS_VREDRAW, IDI_APPLICATION, IMAGE_ICON,
-    LR_LOADFROMFILE, MB_ICONINFORMATION, MB_OK, MF_CHECKED, MF_GRAYED, MF_POPUP, MF_SEPARATOR,
-    MF_STRING, MF_UNCHECKED, MSG, TPM_BOTTOMALIGN, TPM_LEFTALIGN, WM_COMMAND, WM_DESTROY,
-    WM_RBUTTONUP, WM_USER, WNDCLASSW, WS_OVERLAPPEDWINDOW,
+    LR_LOADFROMFILE, MB_ICONINFORMATION, MB_OK, MF_CHECKED, MF_GRAYED, MF_SEPARATOR, MF_STRING,
+    MF_UNCHECKED, MSG, TPM_BOTTOMALIGN, TPM_LEFTALIGN, WM_COMMAND, WM_DESTROY, WM_RBUTTONUP,
+    WM_USER, WNDCLASSW, WS_OVERLAPPEDWINDOW,
 };
 
 const WM_TRAYICON: u32 = WM_USER + 1;
@@ -35,6 +35,7 @@ const ID_MODEL_START: u16 = 1200; // Start of dynamic model IDs (1200-1299)
 const ID_MODEL_END: u16 = 1299;
 const ID_DOWNLOAD_START: u16 = 1300; // Start of download model IDs (1300-1399)
 const ID_DOWNLOAD_END: u16 = 1399;
+const ID_SETTINGS: u16 = 1010;
 
 static SHOULD_EXIT: AtomicBool = AtomicBool::new(false);
 static STREAMING_ENABLED: AtomicBool = AtomicBool::new(false);
@@ -57,6 +58,9 @@ static OPEN_CONFIG_CALLBACK: std::sync::Mutex<Option<Box<dyn Fn() + Send + 'stat
 // Download model callbacks
 static DOWNLOAD_MODEL_CALLBACK: std::sync::Mutex<Option<Box<dyn Fn(usize) + Send + 'static>>> = std::sync::Mutex::new(None);
 static DOWNLOAD_LIST_CALLBACK: std::sync::Mutex<Option<Box<dyn Fn() -> Vec<DownloadModelItem> + Send + 'static>>> = std::sync::Mutex::new(None);
+
+// Settings window callback
+static SETTINGS_CALLBACK: std::sync::Mutex<Option<Box<dyn Fn() + Send + 'static>>> = std::sync::Mutex::new(None);
 
 /// Entry for history menu
 #[derive(Debug, Clone)]
@@ -171,6 +175,16 @@ where
     F: Fn() -> Vec<DownloadModelItem> + Send + 'static,
 {
     if let Ok(mut cb) = DOWNLOAD_LIST_CALLBACK.lock() {
+        *cb = Some(Box::new(callback));
+    }
+}
+
+/// Set the callback invoked when user clicks "Settings..." in the tray
+pub fn set_settings_callback<F>(callback: F)
+where
+    F: Fn() + Send + 'static,
+{
+    if let Ok(mut cb) = SETTINGS_CALLBACK.lock() {
         *cb = Some(Box::new(callback));
     }
 }
@@ -392,6 +406,13 @@ unsafe extern "system" fn window_proc(
                             callback();
                         }
                     }
+                } else if cmd == ID_SETTINGS {
+                    eprintln!("[TRAY] Opening settings");
+                    if let Ok(cb) = SETTINGS_CALLBACK.lock() {
+                        if let Some(ref callback) = *cb {
+                            callback();
+                        }
+                    }
                 } else if cmd >= ID_DOWNLOAD_START && cmd <= ID_DOWNLOAD_END {
                     let index = (cmd - ID_DOWNLOAD_START) as usize;
                     if !IS_DOWNLOADING.load(Ordering::SeqCst) {
@@ -423,177 +444,74 @@ unsafe extern "system" fn window_proc(
 
 unsafe fn show_context_menu(hwnd: HWND) {
     unsafe {
-        if let Ok(menu) = CreatePopupMenu() {
-            let streaming_flag = if STREAMING_ENABLED.load(Ordering::SeqCst) {
-                MF_CHECKED
-            } else {
-                MF_UNCHECKED
-            };
-            let _ = AppendMenuW(
-                menu,
-                streaming_flag | MF_STRING,
-                ID_STREAMING as usize,
-                w!("Streaming"),
-            );
+        let Ok(menu) = CreatePopupMenu() else {
+            return;
+        };
 
-            let selected_chunk = STREAMING_CHUNK_SECONDS.load(Ordering::SeqCst);
-            let chunk_3_flag = if selected_chunk == 3 {
-                MF_CHECKED
-            } else {
-                MF_UNCHECKED
-            };
-            let chunk_8_flag = if selected_chunk == 8 {
-                MF_CHECKED
-            } else {
-                MF_UNCHECKED
-            };
-            let chunk_15_flag = if selected_chunk == 15 {
-                MF_CHECKED
-            } else {
-                MF_UNCHECKED
-            };
+        // ── Model selector (quick switch) ────────────────────────────────────
+        let models = if let Ok(cb) = MODEL_GET_LIST_CALLBACK.lock() {
+            if let Some(ref callback) = *cb { callback() } else { Vec::new() }
+        } else {
+            Vec::new()
+        };
 
-            let _ = AppendMenuW(menu, chunk_3_flag | MF_STRING, ID_CHUNK_3 as usize, w!("Chunk: 3s"));
-            let _ = AppendMenuW(menu, chunk_8_flag | MF_STRING, ID_CHUNK_8 as usize, w!("Chunk: 8s"));
-            let _ = AppendMenuW(
-                menu,
-                chunk_15_flag | MF_STRING,
-                ID_CHUNK_15 as usize,
-                w!("Chunk: 15s"),
-            );
-
-            // Ollama LLM correction toggle
-            let ollama_flag = if OLLAMA_ENABLED.load(Ordering::SeqCst) {
-                MF_CHECKED
-            } else {
-                MF_UNCHECKED
-            };
-            let _ = AppendMenuW(
-                menu,
-                ollama_flag | MF_STRING,
-                ID_OLLAMA as usize,
-                w!("LLM Correction (Ollama)"),
-            );
-
-            // Add Model selector
-            let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
-            let models = if let Ok(cb) = MODEL_GET_LIST_CALLBACK.lock() {
-                if let Some(ref callback) = *cb {
-                    callback()
-                } else {
-                    Vec::new()
-                }
-            } else {
-                Vec::new()
-            };
-
-            if models.is_empty() {
-                let _ = AppendMenuW(menu, MF_GRAYED | MF_STRING, 0, w!("Model: (not configured)"));
-            } else {
-                for model in &models {
-                    let flag = if model.is_current { MF_CHECKED } else { MF_UNCHECKED };
-                    let menu_id = ID_MODEL_START + model.index as u16;
-                    let display = format!("{}{}", model.name, model.size_label);
-                    let wide: Vec<u16> = display.encode_utf16().chain(std::iter::once(0)).collect();
-                    let _ = AppendMenuW(
-                        menu,
-                        flag | MF_STRING,
-                        menu_id as usize,
-                        windows::core::PCWSTR(wide.as_ptr()),
-                    );
-                }
+        if models.is_empty() {
+            let _ = AppendMenuW(menu, MF_GRAYED | MF_STRING, 0, w!("No models — open Settings"));
+        } else {
+            for model in &models {
+                let flag = if model.is_current { MF_CHECKED } else { MF_UNCHECKED };
+                let menu_id = ID_MODEL_START + model.index as u16;
+                let display = format!("{}{}", model.name, model.size_label);
+                let wide: Vec<u16> = display.encode_utf16().chain(std::iter::once(0)).collect();
+                let _ = AppendMenuW(
+                    menu,
+                    flag | MF_STRING,
+                    menu_id as usize,
+                    windows::core::PCWSTR(wide.as_ptr()),
+                );
             }
-
-            // Download Model submenu
-            let download_items = if let Ok(cb) = DOWNLOAD_LIST_CALLBACK.lock() {
-                if let Some(ref callback) = *cb {
-                    callback()
-                } else {
-                    Vec::new()
-                }
-            } else {
-                Vec::new()
-            };
-
-            if !download_items.is_empty() {
-                if IS_DOWNLOADING.load(Ordering::SeqCst) {
-                    let _ = AppendMenuW(
-                        menu,
-                        MF_GRAYED | MF_STRING,
-                        0,
-                        w!("Download in progress..."),
-                    );
-                } else if let Ok(sub) = CreatePopupMenu() {
-                    for item in &download_items {
-                        let flag = if item.already_downloaded {
-                            MF_CHECKED
-                        } else {
-                            MF_UNCHECKED
-                        };
-                        let label = format!("{} (~{} MB)", item.name, item.size_mb);
-                        let wide: Vec<u16> =
-                            label.encode_utf16().chain(std::iter::once(0)).collect();
-                        let id = ID_DOWNLOAD_START + item.index as u16;
-                        let _ = AppendMenuW(
-                            sub,
-                            flag | MF_STRING,
-                            id as usize,
-                            windows::core::PCWSTR(wide.as_ptr()),
-                        );
-                    }
-                    let _ = AppendMenuW(
-                        menu,
-                        MF_POPUP | MF_STRING,
-                        sub.0 as usize,
-                        w!("Download Model"),
-                    );
-                }
-            }
-
-            // Add Recent Recordings submenu
-            let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
-            
-            // Get history entries
-            let history_entries = if let Ok(cb) = HISTORY_GET_ENTRIES_CALLBACK.lock() {
-                if let Some(ref callback) = *cb {
-                    callback()
-                } else {
-                    Vec::new()
-                }
-            } else {
-                Vec::new()
-            };
-
-            if history_entries.is_empty() {
-                let _ = AppendMenuW(menu, MF_GRAYED | MF_STRING, 0, w!("No recent recordings"));
-            } else {
-                let _ = AppendMenuW(menu, MF_STRING, 0, w!("Recent (click to copy):"));
-                for entry in history_entries.iter().take(10) {
-                    let menu_id = ID_HISTORY_START + entry.id as u16;
-                    // Convert label to wide string
-                    let wide_label: Vec<u16> = entry.label.encode_utf16().chain(std::iter::once(0)).collect();
-                    let _ = AppendMenuW(
-                        menu,
-                        MF_STRING,
-                        menu_id as usize,
-                        windows::core::PCWSTR(wide_label.as_ptr()),
-                    );
-                }
-            }
-
-            let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
-            let _ = AppendMenuW(menu, MF_STRING, ID_OPEN_HISTORY as usize, w!("Open Recordings Folder"));
-            let _ = AppendMenuW(menu, MF_STRING, ID_OPEN_CONFIG as usize, w!("Open Config File"));
-            let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
-            let _ = AppendMenuW(menu, MF_STRING, ID_ABOUT as usize, w!("About Dictator"));
-            let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
-            let _ = AppendMenuW(menu, MF_STRING, ID_EXIT as usize, w!("Exit"));
-
-            let mut pt = Default::default();
-            let _ = GetCursorPos(&mut pt);
-
-            let _ = SetForegroundWindow(hwnd);
-            let _ = TrackPopupMenu(menu, TPM_LEFTALIGN | TPM_BOTTOMALIGN, pt.x, pt.y, 0, hwnd, None);
         }
+
+        // ── Recent recordings (last 3) ───────────────────────────────────────
+        let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
+
+        let history_entries = if let Ok(cb) = HISTORY_GET_ENTRIES_CALLBACK.lock() {
+            if let Some(ref callback) = *cb { callback() } else { Vec::new() }
+        } else {
+            Vec::new()
+        };
+
+        if history_entries.is_empty() {
+            let _ = AppendMenuW(menu, MF_GRAYED | MF_STRING, 0, w!("No recent recordings"));
+        } else {
+            for entry in history_entries.iter().take(3) {
+                let menu_id = ID_HISTORY_START + entry.id as u16;
+                let wide_label: Vec<u16> =
+                    entry.label.encode_utf16().chain(std::iter::once(0)).collect();
+                let _ = AppendMenuW(
+                    menu,
+                    MF_STRING,
+                    menu_id as usize,
+                    windows::core::PCWSTR(wide_label.as_ptr()),
+                );
+            }
+        }
+
+        // ── Actions ──────────────────────────────────────────────────────────
+        let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
+        let _ = AppendMenuW(
+            menu,
+            MF_STRING,
+            ID_OPEN_HISTORY as usize,
+            w!("Open Recordings Folder"),
+        );
+        let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
+        let _ = AppendMenuW(menu, MF_STRING, ID_SETTINGS as usize, w!("Settings..."));
+        let _ = AppendMenuW(menu, MF_STRING, ID_EXIT as usize, w!("Exit"));
+
+        let mut pt = Default::default();
+        let _ = GetCursorPos(&mut pt);
+        let _ = SetForegroundWindow(hwnd);
+        let _ = TrackPopupMenu(menu, TPM_LEFTALIGN | TPM_BOTTOMALIGN, pt.x, pt.y, 0, hwnd, None);
     }
 }

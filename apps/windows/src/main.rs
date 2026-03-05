@@ -403,6 +403,11 @@ fn main() -> Result<()> {
         }
     });
 
+    // Settings window callback — implemented in Sprint L; placeholder for now
+    ui::set_settings_callback(|| {
+        info!("[MAIN] Settings window requested (not yet implemented)");
+    });
+
     // Callback to open config file in default editor
     ui::set_open_config_callback(|| {
         let config_path = Config::config_path();
