@@ -6,6 +6,7 @@ pub mod audio;
 pub mod config;
 pub mod history;
 pub mod model_downloader;
+pub mod settings_window;
 pub mod transcribe;
 pub mod whisper_engine;
 pub mod llm;

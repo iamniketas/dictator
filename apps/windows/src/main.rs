@@ -19,6 +19,7 @@ use dictator::overlay_win32::{OverlayConfig, OverlayWindow};
 use dictator::streaming::{StreamingEvent, StreamingTranscriber};
 use dictator::transcribe;
 use dictator::ui;
+use dictator::settings_window::{self, InstalledModel, SavedSettings, SettingsParams};
 use dictator::ui::{DownloadModelItem, ModelMenuItem};
 use dictator::whisper_engine::{self, SharedEngine};
 use dictator::whisper_server::WhisperServerManager;
@@ -403,10 +404,144 @@ fn main() -> Result<()> {
         }
     });
 
-    // Settings window callback — implemented in Sprint L; placeholder for now
-    ui::set_settings_callback(|| {
-        info!("[MAIN] Settings window requested (not yet implemented)");
-    });
+    // Settings window callback — opens the native Win32 settings window
+    {
+        let config_for_settings = config.clone();
+        let active_model_path_for_settings = active_model_path.clone();
+        let engine_for_settings = shared_engine.clone();
+        let log_dir_for_settings = dirs::data_dir()
+            .unwrap_or_else(std::env::temp_dir)
+            .join("dictator")
+            .join("logs");
+        let config_path_for_settings = Config::config_path();
+
+        ui::set_settings_callback(move || {
+            let amp = active_model_path_for_settings.clone();
+            let amp2 = active_model_path_for_settings.clone();
+            let eng = engine_for_settings.clone();
+            let cfg = config_for_settings.clone();
+
+            let injection_method = match &config_for_settings.injection.method {
+                dictator::config::InjectionMethod::Clipboard => "clipboard".to_string(),
+                dictator::config::InjectionMethod::ClipboardEnter => "clipboard_enter".to_string(),
+                dictator::config::InjectionMethod::Direct => "direct".to_string(),
+            };
+
+            let params = SettingsParams {
+                injection_method,
+                llm_enabled: ui::is_ollama_enabled(),
+                ollama_url: config_for_settings.ollama.url.clone(),
+                ollama_model: config_for_settings.ollama.model.clone(),
+                idle_unload_minutes: config_for_settings.memory.idle_unload_minutes,
+                log_dir: log_dir_for_settings.clone(),
+                config_path: config_path_for_settings.clone(),
+                get_models: {
+                    let amp = amp.clone();
+                    let cfg = cfg.clone();
+                    Arc::new(move || {
+                        let active = amp.read().map(|g| g.clone()).unwrap_or_default();
+                        let models_dir = cfg.whisper.effective_models_dir()
+                            .unwrap_or_else(dictator::model_downloader::default_models_dir);
+                        let Ok(entries) = std::fs::read_dir(&models_dir) else { return vec![]; };
+                        let mut result: Vec<InstalledModel> = entries.flatten()
+                            .filter(|e| {
+                                let p = e.path();
+                                p.is_file() && p.extension().map(|x| x == "bin").unwrap_or(false)
+                            })
+                            .map(|e| {
+                                let path = e.path();
+                                let name = e.file_name().to_string_lossy().to_string();
+                                let size_label = std::fs::metadata(&path).map(|m| {
+                                    let gb = m.len() as f64 / (1024.0 * 1024.0 * 1024.0);
+                                    if gb >= 0.1 { format!(" ({:.1} GB)", gb) }
+                                    else { format!(" ({:.0} MB)", m.len() as f64 / (1024.0 * 1024.0)) }
+                                }).unwrap_or_default();
+                                let is_active = path == active;
+                                InstalledModel { path, name, size_label, is_active }
+                            })
+                            .collect();
+                        result.sort_by(|a, b| a.name.cmp(&b.name));
+                        result
+                    })
+                },
+                on_use_model: {
+                    let amp = amp2.clone();
+                    let eng = eng.clone();
+                    let cfg = cfg.clone();
+                    Arc::new(move |path: std::path::PathBuf| {
+                        if let Ok(mut guard) = amp.write() { *guard = path.clone(); }
+                        whisper_engine::unload_engine(&eng);
+                        let mut updated = cfg.clone();
+                        updated.whisper.model_path = path;
+                        if let Err(e) = updated.save() {
+                            error!("[SETTINGS] Failed to save config after model switch: {}", e);
+                        }
+                    })
+                },
+                on_delete_model: Arc::new(|path: std::path::PathBuf| {
+                    if let Err(e) = std::fs::remove_file(&path) {
+                        error!("[SETTINGS] Failed to delete model {:?}: {}", path, e);
+                    } else {
+                        info!("[SETTINGS] Deleted model: {:?}", path);
+                    }
+                }),
+                on_download_model: {
+                    // Reuse the existing tray download callback by triggering the same mechanism
+                    let cfg2 = config_for_settings.clone();
+                    let amp3 = active_model_path_for_settings.clone();
+                    let eng2 = engine_for_settings.clone();
+                    Arc::new(move |index: usize| {
+                        let Some(model) = dictator::model_downloader::KNOWN_MODELS.get(index) else { return; };
+                        let filename = model.filename.to_string();
+                        let name = model.name.to_string();
+                        let target_dir = cfg2.whisper.effective_models_dir()
+                            .unwrap_or_else(dictator::model_downloader::default_models_dir);
+                        let amp = amp3.clone();
+                        let eng = eng2.clone();
+                        let cfg = cfg2.clone();
+                        std::thread::spawn(move || {
+                            ui::set_is_downloading(true);
+                            if let Ok(path) = dictator::model_downloader::download_model(&filename, &target_dir, |_| {}) {
+                                if let Ok(mut guard) = amp.write() { *guard = path.clone(); }
+                                whisper_engine::unload_engine(&eng);
+                                let mut updated = cfg.clone();
+                                updated.whisper.model_path = path;
+                                let _ = updated.save();
+                                info!("[SETTINGS] Downloaded model: {}", name);
+                            }
+                            ui::set_is_downloading(false);
+                        });
+                    })
+                },
+                on_save: {
+                    let cfg = config_for_settings.clone();
+                    Arc::new(move |s: SavedSettings| {
+                        // Update global atomics immediately
+                        ui::set_ollama_enabled(s.llm_enabled);
+
+                        // Persist to config.toml
+                        let mut updated = cfg.clone();
+                        updated.injection.method = match s.injection_method.as_str() {
+                            "clipboard" => dictator::config::InjectionMethod::Clipboard,
+                            "clipboard_enter" => dictator::config::InjectionMethod::ClipboardEnter,
+                            _ => dictator::config::InjectionMethod::Direct,
+                        };
+                        updated.ollama.enabled = s.llm_enabled;
+                        updated.ollama.url = s.ollama_url;
+                        updated.ollama.model = s.ollama_model;
+                        updated.memory.idle_unload_minutes = s.idle_unload_minutes;
+                        if let Err(e) = updated.save() {
+                            error!("[SETTINGS] Failed to save: {}", e);
+                        } else {
+                            info!("[SETTINGS] Config saved successfully");
+                        }
+                    })
+                },
+            };
+
+            settings_window::open(params);
+        });
+    }
 
     // Callback to open config file in default editor
     ui::set_open_config_callback(|| {
