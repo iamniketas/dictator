@@ -25,6 +25,8 @@ const ID_CHUNK_3: u16 = 1003;
 const ID_CHUNK_8: u16 = 1004;
 const ID_CHUNK_15: u16 = 1005;
 const ID_OPEN_HISTORY: u16 = 1006;
+const ID_OLLAMA: u16 = 1007;
+const ID_OPEN_CONFIG: u16 = 1008;
 const ID_HISTORY_START: u16 = 1100; // Start of dynamic history IDs (1100-1199)
 const ID_HISTORY_END: u16 = 1199;
 const ID_MODEL_START: u16 = 1200; // Start of dynamic model IDs (1200-1299)
@@ -33,6 +35,7 @@ const ID_MODEL_END: u16 = 1299;
 static SHOULD_EXIT: AtomicBool = AtomicBool::new(false);
 static STREAMING_ENABLED: AtomicBool = AtomicBool::new(false);
 static STREAMING_CHUNK_SECONDS: AtomicU64 = AtomicU64::new(15);
+static OLLAMA_ENABLED: AtomicBool = AtomicBool::new(false);
 
 // History callbacks
 static HISTORY_OPEN_CALLBACK: std::sync::Mutex<Option<Box<dyn Fn() + Send + 'static>>> = std::sync::Mutex::new(None);
@@ -42,6 +45,9 @@ static HISTORY_GET_ENTRIES_CALLBACK: std::sync::Mutex<Option<Box<dyn Fn() -> Vec
 // Model selector callbacks
 static MODEL_SELECT_CALLBACK: std::sync::Mutex<Option<Box<dyn Fn(usize) + Send + 'static>>> = std::sync::Mutex::new(None);
 static MODEL_GET_LIST_CALLBACK: std::sync::Mutex<Option<Box<dyn Fn() -> Vec<ModelMenuItem> + Send + 'static>>> = std::sync::Mutex::new(None);
+
+// Config open callback
+static OPEN_CONFIG_CALLBACK: std::sync::Mutex<Option<Box<dyn Fn() + Send + 'static>>> = std::sync::Mutex::new(None);
 
 /// Entry for history menu
 #[derive(Debug, Clone)]
@@ -104,6 +110,26 @@ where
     F: Fn() -> Vec<ModelMenuItem> + Send + 'static,
 {
     if let Ok(mut cb) = MODEL_GET_LIST_CALLBACK.lock() {
+        *cb = Some(Box::new(callback));
+    }
+}
+
+/// Check if Ollama LLM correction is enabled (runtime toggle)
+pub fn is_ollama_enabled() -> bool {
+    OLLAMA_ENABLED.load(Ordering::SeqCst)
+}
+
+/// Set Ollama enabled state
+pub fn set_ollama_enabled(enabled: bool) {
+    OLLAMA_ENABLED.store(enabled, Ordering::SeqCst);
+}
+
+/// Set the callback for opening config file
+pub fn set_open_config_callback<F>(callback: F)
+where
+    F: Fn() + Send + 'static,
+{
+    if let Ok(mut cb) = OPEN_CONFIG_CALLBACK.lock() {
         *cb = Some(Box::new(callback));
     }
 }
@@ -304,6 +330,17 @@ unsafe extern "system" fn window_proc(
                             callback(index);
                         }
                     }
+                } else if cmd == ID_OLLAMA {
+                    let new_state = !OLLAMA_ENABLED.load(Ordering::SeqCst);
+                    OLLAMA_ENABLED.store(new_state, Ordering::SeqCst);
+                    eprintln!("[TRAY] Ollama LLM correction {}", if new_state { "enabled" } else { "disabled" });
+                } else if cmd == ID_OPEN_CONFIG {
+                    eprintln!("[TRAY] Opening config file");
+                    if let Ok(cb) = OPEN_CONFIG_CALLBACK.lock() {
+                        if let Some(ref callback) = *cb {
+                            callback();
+                        }
+                    }
                 }
                 LRESULT(0)
             }
@@ -355,6 +392,19 @@ unsafe fn show_context_menu(hwnd: HWND) {
                 chunk_15_flag | MF_STRING,
                 ID_CHUNK_15 as usize,
                 w!("Chunk: 15s"),
+            );
+
+            // Ollama LLM correction toggle
+            let ollama_flag = if OLLAMA_ENABLED.load(Ordering::SeqCst) {
+                MF_CHECKED
+            } else {
+                MF_UNCHECKED
+            };
+            let _ = AppendMenuW(
+                menu,
+                ollama_flag | MF_STRING,
+                ID_OLLAMA as usize,
+                w!("LLM Correction (Ollama)"),
             );
 
             // Add Model selector
@@ -418,6 +468,7 @@ unsafe fn show_context_menu(hwnd: HWND) {
 
             let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
             let _ = AppendMenuW(menu, MF_STRING, ID_OPEN_HISTORY as usize, w!("Open Recordings Folder"));
+            let _ = AppendMenuW(menu, MF_STRING, ID_OPEN_CONFIG as usize, w!("Open Config File"));
             let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
             let _ = AppendMenuW(menu, MF_STRING, ID_EXIT as usize, w!("Exit"));
 

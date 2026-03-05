@@ -138,6 +138,25 @@
 
 ---
 
+## Sprint E: Windows Quality of Life ✅ DONE (2026-03-06)
+
+### E1: Single-Instance Enforcement
+- Named mutex `Global\DictatorSingleInstance` at startup
+- If already running → MessageBox "Check system tray" + clean exit
+- RAII guard `SingleInstanceGuard` releases mutex on app exit
+
+### E2: Ollama Toggle in Tray
+- `OLLAMA_ENABLED` AtomicBool in `ui.rs` — runtime toggle, independent of config.toml
+- Initialized from `config.ollama.enabled` at startup
+- "LLM Correction (Ollama)" menu item with checkmark
+- Recording handler uses `ui::is_ollama_enabled()` (was `config.ollama.enabled`)
+
+### E3: Open Config File from Tray
+- "Open Config File" menu item opens config.toml in Notepad
+- Located between "Open Recordings Folder" and "Exit"
+
+---
+
 ## Priority Order
 
 1. **Sprint A** (Windows P0) ✅ DONE
@@ -145,5 +164,6 @@
 3. **Sprint C1** (shared models) ✅ DONE
 4. **Sprint C2** (memory management) ✅ DONE
 5. **Sprint C3** (history) ✅ DONE (earlier)
-6. **Sprint D1-D2** (model research) — informs future architecture
-7. **Sprint D3** (embedded whisper-rs) — eliminates Python dependency
+6. **Sprint E** (Windows quality of life) ✅ DONE
+7. **Sprint D1-D2** (model research) — informs future architecture
+8. **Sprint D3** (embedded whisper-rs) — eliminates Python dependency

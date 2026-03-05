@@ -20,6 +20,44 @@ use dictator::transcribe;
 use dictator::ui;
 use dictator::ui::ModelMenuItem;
 use dictator::whisper_server::WhisperServerManager;
+use windows::Win32::Foundation::CloseHandle;
+use windows::Win32::System::Threading::CreateMutexW;
+
+/// RAII guard that holds the single-instance named mutex.
+/// When dropped (on exit), the mutex is released, allowing a new instance to start.
+struct SingleInstanceGuard(windows::Win32::Foundation::HANDLE);
+
+impl Drop for SingleInstanceGuard {
+    fn drop(&mut self) {
+        unsafe { let _ = CloseHandle(self.0); }
+    }
+}
+
+/// Try to acquire the single-instance mutex.
+/// Returns `None` (and shows a message box) if another instance is already running.
+fn acquire_single_instance() -> Option<SingleInstanceGuard> {
+    use windows::Win32::Foundation::{GetLastError, ERROR_ALREADY_EXISTS, BOOL};
+    use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_OK, MB_ICONINFORMATION, HWND_DESKTOP};
+    use windows::core::w;
+
+    unsafe {
+        let handle = match CreateMutexW(None, BOOL(1), w!("Global\\DictatorSingleInstance")) {
+            Ok(h) => h,
+            Err(_) => return None,
+        };
+        if GetLastError() == ERROR_ALREADY_EXISTS {
+            let _ = CloseHandle(handle);
+            let _ = MessageBoxW(
+                HWND_DESKTOP,
+                w!("Dictator is already running.\nCheck the system tray."),
+                w!("Dictator"),
+                MB_OK | MB_ICONINFORMATION,
+            );
+            return None;
+        }
+        Some(SingleInstanceGuard(handle))
+    }
+}
 
 fn estimate_recording_size_mb(elapsed: Duration) -> f32 {
     let samples = elapsed.as_secs_f32() * 16000.0;
@@ -100,6 +138,12 @@ fn scan_available_models(config: &Config) -> Vec<ModelMenuItem> {
 }
 
 fn main() -> Result<()> {
+    // Enforce single instance — exit early if another Dictator is running
+    let _single_instance = match acquire_single_instance() {
+        Some(guard) => guard,
+        None => return Ok(()),
+    };
+
     // Initialize logging to file
     let log_dir = dirs::data_dir()
         .unwrap_or_else(std::env::temp_dir)
@@ -126,6 +170,9 @@ fn main() -> Result<()> {
     let config = Config::load()?;
     info!("Config loaded, hotkey: {:?}", config.hotkey);
 
+    // Sync runtime toggles from config
+    ui::set_ollama_enabled(config.ollama.enabled);
+
     // Always start in full transcription mode (streaming disabled by default).
     ui::set_streaming_enabled(false);
     ui::set_streaming_chunk_seconds(config.streaming.poll_interval);
@@ -140,9 +187,9 @@ fn main() -> Result<()> {
 
     // Log Ollama status
     if config.ollama.enabled {
-        info!("Ollama correction enabled ({})", config.ollama.url);
+        info!("Ollama correction enabled ({}) — togglable from tray", config.ollama.url);
     } else {
-        info!("Ollama correction disabled for speed");
+        info!("Ollama correction disabled (can be enabled from tray menu)");
     }
 
     // Create shared audio recorder
@@ -196,6 +243,14 @@ fn main() -> Result<()> {
             } else {
                 info!("[MAIN] Copied recording {} to clipboard", recording.id);
             }
+        }
+    });
+
+    // Callback to open config file in default editor
+    ui::set_open_config_callback(|| {
+        let config_path = Config::config_path();
+        if let Err(e) = std::process::Command::new("notepad").arg(&config_path).spawn() {
+            error!("[MAIN] Failed to open config file: {}", e);
         }
     });
 
@@ -615,8 +670,8 @@ fn main() -> Result<()> {
                         continue;
                     }
 
-                    // Correct text with Ollama (if enabled in config)
-                    let final_text = if config_clone.ollama.enabled {
+                    // Correct text with Ollama (if enabled via config or tray toggle)
+                    let final_text = if ui::is_ollama_enabled() {
                         overlay_clone.update_status_text("Correcting...");
                         match ollama_clone.correct_text(&raw_text) {
                             Ok(corrected) => corrected,
