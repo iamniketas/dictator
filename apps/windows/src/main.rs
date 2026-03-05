@@ -14,11 +14,12 @@ use dictator::config::{Config, WhisperBackend};
 use dictator::history::HistoryManager;
 use dictator::input::{self, HotkeyEvent};
 use dictator::llm::OllamaClient;
+use dictator::model_downloader;
 use dictator::overlay_win32::{OverlayConfig, OverlayWindow};
 use dictator::streaming::{StreamingEvent, StreamingTranscriber};
 use dictator::transcribe;
 use dictator::ui;
-use dictator::ui::ModelMenuItem;
+use dictator::ui::{DownloadModelItem, ModelMenuItem};
 use dictator::whisper_engine::{self, SharedEngine};
 use dictator::whisper_server::WhisperServerManager;
 use windows::Win32::Foundation::CloseHandle;
@@ -407,6 +408,108 @@ fn main() -> Result<()> {
             error!("[MAIN] Failed to open config file: {}", e);
         }
     });
+
+    // ── Model download callbacks ──────────────────────────────────────────────
+
+    // Return list of known models, marking which are already downloaded
+    let config_for_dl_list = config.clone();
+    ui::set_download_list_callback(move || {
+        let models_dir = config_for_dl_list
+            .whisper
+            .effective_models_dir()
+            .unwrap_or_else(model_downloader::default_models_dir);
+
+        model_downloader::KNOWN_MODELS
+            .iter()
+            .enumerate()
+            .map(|(i, m)| {
+                let already_downloaded = models_dir.join(m.filename).is_file();
+                DownloadModelItem {
+                    index: i,
+                    name: m.name.to_string(),
+                    size_mb: m.size_mb,
+                    already_downloaded,
+                }
+            })
+            .collect()
+    });
+
+    // Handle a download request from the tray
+    let config_for_dl = config.clone();
+    let overlay_for_dl = overlay.clone();
+    ui::set_download_model_callback(move |index| {
+        let Some(model) = model_downloader::KNOWN_MODELS.get(index) else {
+            return;
+        };
+        let filename = model.filename.to_string();
+        let name = model.name.to_string();
+        let size_mb = model.size_mb;
+
+        let target_dir = config_for_dl
+            .whisper
+            .effective_models_dir()
+            .unwrap_or_else(model_downloader::default_models_dir);
+
+        let overlay = overlay_for_dl.clone();
+        let config_snapshot = config_for_dl.clone();
+
+        thread::spawn(move || {
+            ui::set_is_downloading(true);
+            overlay.show(&format!("Downloading {} (~{} MB)...", name, size_mb));
+
+            let result = model_downloader::download_model(&filename, &target_dir, |progress| {
+                overlay.update_status_text(&format!(
+                    "Downloading {} ({:.0}%)",
+                    name,
+                    progress * 100.0
+                ));
+            });
+
+            ui::set_is_downloading(false);
+
+            match result {
+                Ok(path) => {
+                    info!("[DOWNLOAD] Model saved to: {:?}", path);
+
+                    // Update config.toml to point at the new model
+                    let mut updated = config_snapshot.clone();
+                    updated.whisper.model_path = path.clone();
+                    if let Err(e) = updated.save() {
+                        error!("[DOWNLOAD] Failed to save config after download: {}", e);
+                    } else {
+                        info!("[DOWNLOAD] config.toml updated: model_path = {:?}", path);
+                    }
+
+                    overlay.show(&format!(
+                        "Downloaded {} \u{2713}\nRestart Dictator to use this model.",
+                        name
+                    ));
+                    thread::sleep(Duration::from_secs(4));
+                    overlay.hide();
+                }
+                Err(e) => {
+                    error!("[DOWNLOAD] Failed: {}", e);
+                    overlay.show(&format!("Download failed: {}", e));
+                    thread::sleep(Duration::from_secs(5));
+                    overlay.hide();
+                }
+            }
+        });
+    });
+
+    // ── On first launch: show a hint if no model is found ───────────────────
+    if config.whisper.backend == WhisperBackend::Embedded
+        && !config.whisper.model_path.is_file()
+    {
+        let overlay_for_hint = overlay.clone();
+        thread::spawn(move || {
+            thread::sleep(Duration::from_millis(800)); // let the app fully start
+            overlay_for_hint
+                .show("No Whisper model found.\nRight-click tray \u{2192} Download Model");
+            thread::sleep(Duration::from_secs(6));
+            overlay_for_hint.hide();
+        });
+    }
 
     // Set up model selector callbacks
     let config_for_models = config.clone();

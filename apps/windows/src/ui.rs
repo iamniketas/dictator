@@ -14,9 +14,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DispatchMessageW,
     GetCursorPos, GetMessageW, LoadIconW, LoadImageW, MessageBoxW, PostQuitMessage, RegisterClassW,
     SetForegroundWindow, TrackPopupMenu, CS_HREDRAW, CS_VREDRAW, IDI_APPLICATION, IMAGE_ICON,
-    LR_LOADFROMFILE, MB_ICONINFORMATION, MB_OK, MF_CHECKED, MF_GRAYED, MF_SEPARATOR, MF_STRING,
-    MF_UNCHECKED, MSG, TPM_BOTTOMALIGN, TPM_LEFTALIGN, WM_COMMAND, WM_DESTROY, WM_RBUTTONUP,
-    WM_USER, WNDCLASSW, WS_OVERLAPPEDWINDOW,
+    LR_LOADFROMFILE, MB_ICONINFORMATION, MB_OK, MF_CHECKED, MF_GRAYED, MF_POPUP, MF_SEPARATOR,
+    MF_STRING, MF_UNCHECKED, MSG, TPM_BOTTOMALIGN, TPM_LEFTALIGN, WM_COMMAND, WM_DESTROY,
+    WM_RBUTTONUP, WM_USER, WNDCLASSW, WS_OVERLAPPEDWINDOW,
 };
 
 const WM_TRAYICON: u32 = WM_USER + 1;
@@ -33,11 +33,14 @@ const ID_HISTORY_START: u16 = 1100; // Start of dynamic history IDs (1100-1199)
 const ID_HISTORY_END: u16 = 1199;
 const ID_MODEL_START: u16 = 1200; // Start of dynamic model IDs (1200-1299)
 const ID_MODEL_END: u16 = 1299;
+const ID_DOWNLOAD_START: u16 = 1300; // Start of download model IDs (1300-1399)
+const ID_DOWNLOAD_END: u16 = 1399;
 
 static SHOULD_EXIT: AtomicBool = AtomicBool::new(false);
 static STREAMING_ENABLED: AtomicBool = AtomicBool::new(false);
 static STREAMING_CHUNK_SECONDS: AtomicU64 = AtomicU64::new(15);
 static OLLAMA_ENABLED: AtomicBool = AtomicBool::new(false);
+static IS_DOWNLOADING: AtomicBool = AtomicBool::new(false);
 
 // History callbacks
 static HISTORY_OPEN_CALLBACK: std::sync::Mutex<Option<Box<dyn Fn() + Send + 'static>>> = std::sync::Mutex::new(None);
@@ -51,11 +54,25 @@ static MODEL_GET_LIST_CALLBACK: std::sync::Mutex<Option<Box<dyn Fn() -> Vec<Mode
 // Config open callback
 static OPEN_CONFIG_CALLBACK: std::sync::Mutex<Option<Box<dyn Fn() + Send + 'static>>> = std::sync::Mutex::new(None);
 
+// Download model callbacks
+static DOWNLOAD_MODEL_CALLBACK: std::sync::Mutex<Option<Box<dyn Fn(usize) + Send + 'static>>> = std::sync::Mutex::new(None);
+static DOWNLOAD_LIST_CALLBACK: std::sync::Mutex<Option<Box<dyn Fn() -> Vec<DownloadModelItem> + Send + 'static>>> = std::sync::Mutex::new(None);
+
 /// Entry for history menu
 #[derive(Debug, Clone)]
 pub struct HistoryMenuEntry {
     pub id: usize,  // 0-based index
     pub label: String,
+}
+
+/// Entry for download model submenu
+#[derive(Debug, Clone)]
+pub struct DownloadModelItem {
+    pub index: usize,
+    pub name: String,
+    pub size_mb: u32,
+    /// Whether the file already exists in the models directory
+    pub already_downloaded: bool,
 }
 
 /// Entry for model selector menu
@@ -136,6 +153,36 @@ where
     if let Ok(mut cb) = OPEN_CONFIG_CALLBACK.lock() {
         *cb = Some(Box::new(callback));
     }
+}
+
+/// Set the callback invoked when user selects a model to download (receives 0-based KNOWN_MODELS index)
+pub fn set_download_model_callback<F>(callback: F)
+where
+    F: Fn(usize) + Send + 'static,
+{
+    if let Ok(mut cb) = DOWNLOAD_MODEL_CALLBACK.lock() {
+        *cb = Some(Box::new(callback));
+    }
+}
+
+/// Set the callback that returns the list of downloadable models (with availability flags)
+pub fn set_download_list_callback<F>(callback: F)
+where
+    F: Fn() -> Vec<DownloadModelItem> + Send + 'static,
+{
+    if let Ok(mut cb) = DOWNLOAD_LIST_CALLBACK.lock() {
+        *cb = Some(Box::new(callback));
+    }
+}
+
+/// Returns true while a model download is in progress (blocks tray interaction)
+pub fn is_downloading() -> bool {
+    IS_DOWNLOADING.load(Ordering::SeqCst)
+}
+
+/// Set the downloading state (called by main thread during download)
+pub fn set_is_downloading(value: bool) {
+    IS_DOWNLOADING.store(value, Ordering::SeqCst);
 }
 
 /// Check if streaming is enabled
@@ -345,6 +392,16 @@ unsafe extern "system" fn window_proc(
                             callback();
                         }
                     }
+                } else if cmd >= ID_DOWNLOAD_START && cmd <= ID_DOWNLOAD_END {
+                    let index = (cmd - ID_DOWNLOAD_START) as usize;
+                    if !IS_DOWNLOADING.load(Ordering::SeqCst) {
+                        eprintln!("[TRAY] Download model index {}", index);
+                        if let Ok(cb) = DOWNLOAD_MODEL_CALLBACK.lock() {
+                            if let Some(ref callback) = *cb {
+                                callback(index);
+                            }
+                        }
+                    }
                 } else if cmd == ID_ABOUT {
                     let _ = MessageBoxW(
                         hwnd,
@@ -443,6 +500,52 @@ unsafe fn show_context_menu(hwnd: HWND) {
                         flag | MF_STRING,
                         menu_id as usize,
                         windows::core::PCWSTR(wide.as_ptr()),
+                    );
+                }
+            }
+
+            // Download Model submenu
+            let download_items = if let Ok(cb) = DOWNLOAD_LIST_CALLBACK.lock() {
+                if let Some(ref callback) = *cb {
+                    callback()
+                } else {
+                    Vec::new()
+                }
+            } else {
+                Vec::new()
+            };
+
+            if !download_items.is_empty() {
+                if IS_DOWNLOADING.load(Ordering::SeqCst) {
+                    let _ = AppendMenuW(
+                        menu,
+                        MF_GRAYED | MF_STRING,
+                        0,
+                        w!("Download in progress..."),
+                    );
+                } else if let Ok(sub) = CreatePopupMenu() {
+                    for item in &download_items {
+                        let flag = if item.already_downloaded {
+                            MF_CHECKED
+                        } else {
+                            MF_UNCHECKED
+                        };
+                        let label = format!("{} (~{} MB)", item.name, item.size_mb);
+                        let wide: Vec<u16> =
+                            label.encode_utf16().chain(std::iter::once(0)).collect();
+                        let id = ID_DOWNLOAD_START + item.index as u16;
+                        let _ = AppendMenuW(
+                            sub,
+                            flag | MF_STRING,
+                            id as usize,
+                            windows::core::PCWSTR(wide.as_ptr()),
+                        );
+                    }
+                    let _ = AppendMenuW(
+                        menu,
+                        MF_POPUP | MF_STRING,
+                        sub.0 as usize,
+                        w!("Download Model"),
                     );
                 }
             }
