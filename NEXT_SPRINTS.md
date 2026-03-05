@@ -215,6 +215,20 @@ Or switch to embedded (recommended):
 
 ---
 
+## Sprint H: In-App Model Downloader ✅ DONE (2026-03-06)
+
+### H1: GGML Model Download from Tray
+- `model_downloader.rs`: known models list (tiny/base/small/medium/large-v3-turbo/large-v3)
+- Downloads from `huggingface.co/ggerganov/whisper.cpp` via `reqwest` blocking with streaming
+- Atomic write: temp file + rename on completion (no partial/corrupt models)
+- Tray: "Download Model ▶" popup submenu with checkmarks for already-downloaded models
+- Progress shown in overlay: "Downloading large-v3 (47%)"
+- After success: updates `config.toml model_path`, shows "restart" hint
+- Startup hint: if no model found, overlay shows download instructions for 6 seconds
+- `IS_DOWNLOADING` guard prevents concurrent downloads
+
+---
+
 ### E3: Open Config File from Tray
 - "Open Config File" menu item opens config.toml in Notepad
 - Located between "Open Recordings Folder" and "Exit"
@@ -232,4 +246,5 @@ Or switch to embedded (recommended):
 7. **Sprint F** (UX polish) ✅ DONE
 8. **Sprint G** (CLI remote control + About) ✅ DONE
 9. **Sprint D3** (embedded whisper-rs) ✅ DONE
-10. **Sprint D1-D2** (model research) — informs future architecture
+10. **Sprint H** (in-app model downloader) ✅ DONE
+11. **Sprint D1-D2** (model research) — informs future architecture
