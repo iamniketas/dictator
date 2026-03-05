@@ -1,0 +1,81 @@
+name: Release (Windows)
+
+# Triggers on version tags: git tag v1.0.0 && git push origin v1.0.0
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    runs-on: windows-latest
+    permissions:
+      contents: write  # required to create GitHub Releases and upload assets
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Extract "1.2.3" from tag "v1.2.3"
+      - name: Extract version
+        id: ver
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}".TrimStart('v')
+          echo "VERSION=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/windows
+
+      - name: Build release binary
+        working-directory: apps/windows
+        run: cargo build --release
+
+      # Stage only the exe so vpk doesn't pick up build artifacts
+      - name: Stage app for packaging
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path apps/windows/dist -Force
+          Copy-Item apps/windows/target/release/dictator.exe apps/windows/dist/
+
+      - name: Install .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.x'
+
+      - name: Install vpk CLI
+        run: dotnet tool install --global vpk
+
+      # vpk pack generates:
+      #   Releases/dictator-{version}-full.nupkg  — update package
+      #   Releases/releases.stable.json            — feed file (updater reads this)
+      #   Releases/dictator-{version}-Setup.exe   — installer for first install
+      - name: Package with Velopack
+        working-directory: apps/windows
+        shell: pwsh
+        run: |
+          vpk pack `
+            --appId dictator `
+            --version ${{ steps.ver.outputs.VERSION }} `
+            --packDir dist `
+            --mainExe dictator.exe `
+            --releaseDir Releases `
+            --packTitle "Dictator" `
+            --icon assets/dictator.ico
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "Dictator v${{ steps.ver.outputs.VERSION }}"
+          generate_release_notes: true
+          files: |
+            apps/windows/Releases/dictator-*-full.nupkg
+            apps/windows/Releases/releases.stable.json
+            apps/windows/Releases/dictator-*-Setup.exe
