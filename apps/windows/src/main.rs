@@ -21,7 +21,10 @@ use dictator::ui;
 use dictator::ui::ModelMenuItem;
 use dictator::whisper_server::WhisperServerManager;
 use windows::Win32::Foundation::CloseHandle;
-use windows::Win32::System::Threading::CreateMutexW;
+use windows::Win32::System::Threading::{
+    CreateEventW, CreateMutexW, OpenEventW, SetEvent, WaitForMultipleObjects,
+    SYNCHRONIZATION_ACCESS_RIGHTS,
+};
 
 /// RAII guard that holds the single-instance named mutex.
 /// When dropped (on exit), the mutex is released, allowing a new instance to start.
@@ -31,6 +34,71 @@ impl Drop for SingleInstanceGuard {
     fn drop(&mut self) {
         unsafe { let _ = CloseHandle(self.0); }
     }
+}
+
+/// Try to open and signal an existing named event (used by CLI --toggle / --stop).
+/// Returns true if the event was found and signaled (another instance is running).
+fn try_signal_remote(event_name: windows::core::PCWSTR) -> bool {
+    // EVENT_MODIFY_STATE = 0x0002
+    unsafe {
+        // EVENT_MODIFY_STATE = 0x0002
+        match OpenEventW(SYNCHRONIZATION_ACCESS_RIGHTS(0x0002), windows::Win32::Foundation::BOOL(0), event_name) {
+            Ok(handle) => {
+                let _ = SetEvent(handle);
+                let _ = CloseHandle(handle);
+                true
+            }
+            Err(_) => false,
+        }
+    }
+}
+
+/// Start IPC listener thread. Creates two named events:
+/// - `DictatorToggleEvent` — signals RecordToggle (used by --toggle)
+/// - `DictatorStopEvent`  — signals RecordStop   (used by --stop)
+fn start_ipc_listener(tx: std::sync::mpsc::Sender<dictator::input::HotkeyEvent>) {
+    use dictator::input::HotkeyEvent;
+    use windows::core::w;
+    use windows::Win32::Foundation::BOOL;
+
+    thread::spawn(move || unsafe {
+        let Ok(toggle_ev) = CreateEventW(None, BOOL(0), BOOL(0), w!("DictatorToggleEvent")) else {
+            warn!("[IPC] Failed to create DictatorToggleEvent");
+            return;
+        };
+        let Ok(stop_ev) = CreateEventW(None, BOOL(0), BOOL(0), w!("DictatorStopEvent")) else {
+            warn!("[IPC] Failed to create DictatorStopEvent");
+            let _ = CloseHandle(toggle_ev);
+            return;
+        };
+
+        info!("[IPC] Listener ready (toggle=DictatorToggleEvent, stop=DictatorStopEvent)");
+
+        let handles = [toggle_ev, stop_ev];
+        loop {
+            // INFINITE = 0xFFFF_FFFF; WaitForMultipleObjects returns WAIT_EVENT (newtype u32)
+            let result = WaitForMultipleObjects(&handles, BOOL(0), 0xFFFF_FFFF_u32);
+            match result.0 {
+                0 => {
+                    info!("[IPC] Remote toggle received");
+                    if tx.send(HotkeyEvent::RemoteToggle).is_err() {
+                        break; // channel closed (app shutting down)
+                    }
+                }
+                1 => {
+                    info!("[IPC] Remote stop received");
+                    if tx.send(HotkeyEvent::RemoteStop).is_err() {
+                        break;
+                    }
+                }
+                _ => break, // WAIT_FAILED or unexpected
+            }
+        }
+
+        let _ = CloseHandle(toggle_ev);
+        let _ = CloseHandle(stop_ev);
+        info!("[IPC] Listener stopped");
+    });
 }
 
 /// Try to acquire the single-instance mutex.
@@ -163,6 +231,38 @@ fn scan_available_models(config: &Config) -> Vec<ModelMenuItem> {
 }
 
 fn main() -> Result<()> {
+    // Handle CLI remote-control args before single-instance check.
+    // These signal a running instance and exit immediately.
+    {
+        use windows::core::w;
+        use windows::Win32::UI::WindowsAndMessaging::{
+            MessageBoxW, MB_ICONINFORMATION, MB_OK,
+        };
+        let args: Vec<String> = std::env::args().skip(1).collect();
+        for arg in &args {
+            match arg.as_str() {
+                "--toggle" => {
+                    if !try_signal_remote(w!("DictatorToggleEvent")) {
+                        unsafe {
+                            let _ = MessageBoxW(
+                                windows::Win32::Foundation::HWND(std::ptr::null_mut()),
+                                w!("Dictator is not running."),
+                                w!("Dictator"),
+                                MB_OK | MB_ICONINFORMATION,
+                            );
+                        }
+                    }
+                    return Ok(());
+                }
+                "--stop" => {
+                    let _ = try_signal_remote(w!("DictatorStopEvent"));
+                    return Ok(());
+                }
+                _ => {}
+            }
+        }
+    }
+
     // Enforce single instance — exit early if another Dictator is running
     let _single_instance = match acquire_single_instance() {
         Some(guard) => guard,
@@ -305,7 +405,10 @@ fn main() -> Result<()> {
 
     // Start hotkey listener
     let (tx, rx) = mpsc::channel();
-    let _hotkey_handle = input::start_hotkey_listener(tx);
+    let _hotkey_handle = input::start_hotkey_listener(tx.clone());
+
+    // Start IPC listener for CLI --toggle / --stop
+    start_ipc_listener(tx.clone());
 
     // Create streaming channel
     let (streaming_tx, streaming_rx) = std::sync::mpsc::channel::<StreamingEvent>();
@@ -440,7 +543,29 @@ fn main() -> Result<()> {
                 None => continue,
             };
 
+            // Normalize remote CLI events to concrete RecordStart/RecordStop
+            let event = match event {
+                HotkeyEvent::RemoteToggle => {
+                    let hwnd = input::get_foreground_window_handle();
+                    if is_recording {
+                        HotkeyEvent::RecordStop { hwnd }
+                    } else {
+                        HotkeyEvent::RecordStart { hwnd }
+                    }
+                }
+                HotkeyEvent::RemoteStop => {
+                    if is_recording {
+                        HotkeyEvent::RecordStop { hwnd: input::get_foreground_window_handle() }
+                    } else {
+                        continue; // not recording, nothing to stop
+                    }
+                }
+                other => other,
+            };
+
             match event {
+                // RemoteToggle/RemoteStop are normalized to RecordStart/RecordStop above
+                HotkeyEvent::RemoteToggle | HotkeyEvent::RemoteStop => unreachable!(),
                 HotkeyEvent::RecordStart { hwnd } => {
                     if is_recording {
                         warn!("[MAIN] Received RecordStart but already recording! Ignoring.");

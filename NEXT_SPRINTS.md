@@ -162,6 +162,22 @@
 - `ModelMenuItem` now has `size_label: String` field, e.g. " (3.1 GB)"
 - Displayed as "large-v3 (3.1 GB)" in tray model menu
 
+## Sprint G: CLI Remote Control + About ✅ DONE (2026-03-06)
+
+### G1: CLI --toggle / --stop via Named Windows Events
+- `DictatorToggleEvent` and `DictatorStopEvent` named auto-reset events
+- Main instance: `start_ipc_listener()` creates events and spawns thread, sends `RemoteToggle`/`RemoteStop` to hotkey channel
+- CLI: parsed before single-instance check; `try_signal_remote()` opens + signals event
+  - `dictator.exe --toggle` — toggles recording (shows dialog if not running)
+  - `dictator.exe --stop`   — stops recording silently if active
+- `RemoteToggle`/`RemoteStop` normalized to `RecordStart`/`RecordStop` in event loop
+
+### G2: About Dialog in Tray
+- "About Dictator" menu item above Exit
+- Shows version, hotkey description, and "runs 100% locally" message via MessageBoxW
+
+---
+
 ### F3: Long Recording Notification in Overlay
 - After 30 seconds of active recording, overlay status appends:
   "Tip: tap hotkey again to stop"
@@ -184,5 +200,6 @@
 5. **Sprint C3** (history) ✅ DONE (earlier)
 6. **Sprint E** (Windows quality of life) ✅ DONE
 7. **Sprint F** (UX polish) ✅ DONE
-8. **Sprint D1-D2** (model research) — informs future architecture
-9. **Sprint D3** (embedded whisper-rs) — eliminates Python dependency
+8. **Sprint G** (CLI remote control + About) ✅ DONE
+9. **Sprint D1-D2** (model research) — informs future architecture
+10. **Sprint D3** (embedded whisper-rs) — eliminates Python dependency

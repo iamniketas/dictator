@@ -12,10 +12,11 @@ use windows::Win32::UI::Shell::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DispatchMessageW,
-    GetCursorPos, GetMessageW, LoadIconW, LoadImageW, PostQuitMessage, RegisterClassW,
+    GetCursorPos, GetMessageW, LoadIconW, LoadImageW, MessageBoxW, PostQuitMessage, RegisterClassW,
     SetForegroundWindow, TrackPopupMenu, CS_HREDRAW, CS_VREDRAW, IDI_APPLICATION, IMAGE_ICON,
-    LR_LOADFROMFILE, MF_CHECKED, MF_GRAYED, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MSG, TPM_BOTTOMALIGN,
-    TPM_LEFTALIGN, WM_COMMAND, WM_DESTROY, WM_RBUTTONUP, WM_USER, WNDCLASSW, WS_OVERLAPPEDWINDOW,
+    LR_LOADFROMFILE, MB_ICONINFORMATION, MB_OK, MF_CHECKED, MF_GRAYED, MF_SEPARATOR, MF_STRING,
+    MF_UNCHECKED, MSG, TPM_BOTTOMALIGN, TPM_LEFTALIGN, WM_COMMAND, WM_DESTROY, WM_RBUTTONUP,
+    WM_USER, WNDCLASSW, WS_OVERLAPPEDWINDOW,
 };
 
 const WM_TRAYICON: u32 = WM_USER + 1;
@@ -27,6 +28,7 @@ const ID_CHUNK_15: u16 = 1005;
 const ID_OPEN_HISTORY: u16 = 1006;
 const ID_OLLAMA: u16 = 1007;
 const ID_OPEN_CONFIG: u16 = 1008;
+const ID_ABOUT: u16 = 1009;
 const ID_HISTORY_START: u16 = 1100; // Start of dynamic history IDs (1100-1199)
 const ID_HISTORY_END: u16 = 1199;
 const ID_MODEL_START: u16 = 1200; // Start of dynamic model IDs (1200-1299)
@@ -343,6 +345,13 @@ unsafe extern "system" fn window_proc(
                             callback();
                         }
                     }
+                } else if cmd == ID_ABOUT {
+                    let _ = MessageBoxW(
+                        hwnd,
+                        w!("Dictator v0.1.0-alpha\r\nVoice dictation for Windows\r\n\r\nHotkey: Right Alt\r\n  Hold >300ms \u{2192} Push-to-Talk\r\n  Tap          \u{2192} Toggle mode\r\n\r\nRuns 100% locally. No cloud, no telemetry.\r\n\r\nhttps://github.com/"),
+                        w!("About Dictator"),
+                        MB_OK | MB_ICONINFORMATION,
+                    );
                 }
                 LRESULT(0)
             }
@@ -472,6 +481,8 @@ unsafe fn show_context_menu(hwnd: HWND) {
             let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
             let _ = AppendMenuW(menu, MF_STRING, ID_OPEN_HISTORY as usize, w!("Open Recordings Folder"));
             let _ = AppendMenuW(menu, MF_STRING, ID_OPEN_CONFIG as usize, w!("Open Config File"));
+            let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
+            let _ = AppendMenuW(menu, MF_STRING, ID_ABOUT as usize, w!("About Dictator"));
             let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
             let _ = AppendMenuW(menu, MF_STRING, ID_EXIT as usize, w!("Exit"));
 

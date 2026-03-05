@@ -37,6 +37,10 @@ static HOTKEY_LISTENER: Mutex<HotkeyListenerState> = Mutex::new(HotkeyListenerSt
 pub enum HotkeyEvent {
     RecordStart { hwnd: isize },
     RecordStop { hwnd: isize },
+    /// Sent by CLI --toggle: toggle recording state
+    RemoteToggle,
+    /// Sent by CLI --stop: stop recording if active
+    RemoteStop,
 }
 
 /// Get handle of currently focused window as isize
