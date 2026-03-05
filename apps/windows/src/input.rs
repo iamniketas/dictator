@@ -5,7 +5,6 @@ use std::thread;
 use std::time::{Duration, Instant};
 use tracing::{error, info};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
-use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_CONTROL, VK_SHIFT};
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, DispatchMessageW, GetForegroundWindow, GetMessageW, SetForegroundWindow,
     SetWindowsHookExW, ShowWindow, TranslateMessage, UnhookWindowsHookEx, KBDLLHOOKSTRUCT,
@@ -14,6 +13,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 /// Hold duration threshold: above = Push-to-Talk, below = Toggle
 const PTT_THRESHOLD_MS: u64 = 300;
+
+/// VK_RMENU — Right Alt key (0xA5)
+const TARGET_VK: u32 = 0xA5;
 
 struct HotkeyListenerState {
     /// true = toggle recording is active, next key down will stop
@@ -70,7 +72,7 @@ pub fn set_foreground_window(hwnd_value: isize) -> anyhow::Result<()> {
 }
 
 /// Start hotkey listener in a separate thread.
-/// Ctrl+Shift+D behavior:
+/// Right Alt behavior:
 ///   - Hold >300ms → Push-to-Talk: recording stops on key release
 ///   - Tap <300ms  → Toggle: first tap starts, second tap stops
 pub fn start_hotkey_listener(tx: mpsc::Sender<HotkeyEvent>) -> thread::JoinHandle<()> {
@@ -89,7 +91,7 @@ pub fn start_hotkey_listener(tx: mpsc::Sender<HotkeyEvent>) -> thread::JoinHandl
                 }
             };
 
-            info!("[HOTKEY] LL keyboard hook installed (Ctrl+Shift+D, PTT/Toggle)");
+            info!("[HOTKEY] LL keyboard hook installed (Right Alt, PTT/Toggle)");
 
             let mut msg = MSG::default();
             while GetMessageW(&mut msg, None, 0, 0).into() {
@@ -120,16 +122,7 @@ unsafe extern "system" fn ll_keyboard_hook(
 
 /// Returns true if the event was consumed (hotkey matched).
 fn process_hotkey_event(vk: u32, is_key_up: bool) -> bool {
-    const TARGET_VK: u32 = 0x44; // 'D'
-
     if vk != TARGET_VK {
-        return false;
-    }
-
-    // Check Ctrl+Shift modifiers
-    let ctrl = unsafe { (GetAsyncKeyState(VK_CONTROL.0 as i32) as u16) & 0x8000 != 0 };
-    let shift = unsafe { (GetAsyncKeyState(VK_SHIFT.0 as i32) as u16) & 0x8000 != 0 };
-    if !ctrl || !shift {
         return false;
     }
 

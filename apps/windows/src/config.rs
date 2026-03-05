@@ -142,8 +142,8 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             hotkey: HotkeyConfig {
-                modifiers: vec!["ctrl".into(), "shift".into()],
-                key: "D".into(),
+                modifiers: vec![],
+                key: "right_alt".into(),
             },
             audio: AudioConfig {
                 device: None,
@@ -233,7 +233,7 @@ mod tests {
     #[test]
     fn test_default_config() {
         let config = Config::default();
-        assert_eq!(config.hotkey.key, "D");
+        assert_eq!(config.hotkey.key, "right_alt");
         assert_eq!(config.audio.sample_rate, 16000);
     }
 }

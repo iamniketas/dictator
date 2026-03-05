@@ -13,3 +13,7 @@ if errorlevel 1 (
 echo.
 echo Starting Dictator...
 start "" "%~dp0apps\windows\target\debug\dictator.exe"
+
+echo.
+echo Done. Press any key to close this window.
+pause >nul
