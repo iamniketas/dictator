@@ -14,32 +14,34 @@
 
 ---
 
-## Sprint A: Windows — Phase 1 MVP+ (P0 features from ROADMAP)
+## Sprint A: Windows — Phase 1 MVP+ ✅ DONE (2026-03-05)
 
-**Goal:** Make Dictator competitive as a daily driver on Windows.
+**Commit:** `c666d24`
 
-### A1: Smart Hotkeys (MEDIUM)
-- Implement dual mode: Push-to-Talk (hold) + Toggle (double-click)
-- Single hotkey, behavior depends on press pattern
-- Reference: Wispr Flow double-click pattern
-- Files: `apps/windows/src/input.rs`
+### A1: Smart Hotkeys ✅
+- LL keyboard hook (`SetWindowsHookExW`) — key down + key up events
+- Hold >300ms = Push-to-Talk (stops on release)
+- Tap <300ms = Toggle (stops on next press)
+- Key suppressed from target app
 
-### A2: Audio Waveform Overlay (LOW)
-- Show real-time microphone amplitude (volume wave) in overlay
-- Replace current static "REC" indicator
-- Files: `apps/windows/src/overlay_win32.rs`, `apps/windows/src/audio.rs`
+### A2: Audio Waveform Overlay ✅
+- Lock-free RMS amplitude via `AtomicU32` in audio callback
+- 20-bar waveform, 30fps dedicated thread
+- Replaces blinking dot
 
-### A3: Flexible Text Injection (LOW-MEDIUM)
-- Add injection modes: direct (SendInput), clipboard, clipboard+Enter
-- Config option `injection.method`
-- Preserve original clipboard contents when using clipboard mode
-- Files: `apps/windows/src/input.rs`, `apps/windows/src/config.rs`
+### A3: Flexible Text Injection ✅
+- `[injection] method = direct|clipboard|clipboard_enter`
+- clipboard mode preserves and restores original clipboard
+- `clipboard_enter` appends Enter after paste
 
-### A4: Model Selector in Tray Menu (MEDIUM)
-- List available models in tray context menu
-- Switch model without editing TOML
-- Show current model name in menu
-- Files: `apps/windows/src/ui.rs`, `apps/windows/src/config.rs`
+### A4: Model Selector in Tray ✅
+- Scans `whisper.models_dir` (defaults to parent of `model_path`)
+- Checkmark on active model, click saves to config.toml
+- New optional config field `whisper.models_dir`
+
+### Known issues found during testing
+- Faster-whisper inserts double spaces between segments (upstream behavior)
+  → Can fix with `.replace("  ", " ")` post-processing if needed
 
 ---
 
