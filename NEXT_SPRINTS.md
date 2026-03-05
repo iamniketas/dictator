@@ -151,6 +151,24 @@
 - "LLM Correction (Ollama)" menu item with checkmark
 - Recording handler uses `ui::is_ollama_enabled()` (was `config.ollama.enabled`)
 
+## Sprint F: UX Polish ✅ DONE (2026-03-06)
+
+### F1: Whitespace Normalization (known faster-whisper bug)
+- After transcription, `raw_text.split_whitespace().join(" ")` removes double spaces and trims
+- Fixes upstream faster-whisper behavior of inserting double spaces between segments
+
+### F2: Model Size in Tray Selector
+- `model_dir_size_label()` computes total file size of model directory (single-level scan)
+- `ModelMenuItem` now has `size_label: String` field, e.g. " (3.1 GB)"
+- Displayed as "large-v3 (3.1 GB)" in tray model menu
+
+### F3: Long Recording Notification in Overlay
+- After 30 seconds of active recording, overlay status appends:
+  "Tip: tap hotkey again to stop"
+- Helps users in PTT mode who forget to release
+
+---
+
 ### E3: Open Config File from Tray
 - "Open Config File" menu item opens config.toml in Notepad
 - Located between "Open Recordings Folder" and "Exit"
@@ -165,5 +183,6 @@
 4. **Sprint C2** (memory management) ✅ DONE
 5. **Sprint C3** (history) ✅ DONE (earlier)
 6. **Sprint E** (Windows quality of life) ✅ DONE
-7. **Sprint D1-D2** (model research) — informs future architecture
-8. **Sprint D3** (embedded whisper-rs) — eliminates Python dependency
+7. **Sprint F** (UX polish) ✅ DONE
+8. **Sprint D1-D2** (model research) — informs future architecture
+9. **Sprint D3** (embedded whisper-rs) — eliminates Python dependency

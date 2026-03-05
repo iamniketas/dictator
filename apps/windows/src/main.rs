@@ -101,6 +101,29 @@ fn format_transcribing_status(
     )
 }
 
+/// Compute a human-readable size label for a model directory (single-level scan).
+fn model_dir_size_label(path: &std::path::Path) -> String {
+    let mut total: u64 = 0;
+    if let Ok(entries) = std::fs::read_dir(path) {
+        for entry in entries.flatten() {
+            if let Ok(meta) = entry.metadata() {
+                if meta.is_file() {
+                    total += meta.len();
+                }
+            }
+        }
+    }
+    if total == 0 {
+        return String::new();
+    }
+    let gb = total as f64 / (1024.0 * 1024.0 * 1024.0);
+    if gb >= 0.1 {
+        format!(" ({:.1} GB)", gb)
+    } else {
+        format!(" ({:.0} MB)", total as f64 / (1024.0 * 1024.0))
+    }
+}
+
 fn scan_available_models(config: &Config) -> Vec<ModelMenuItem> {
     let Some(models_dir) = config.whisper.effective_models_dir() else {
         return Vec::new();
@@ -122,9 +145,11 @@ fn scan_available_models(config: &Config) -> Vec<ModelMenuItem> {
         .filter(|e| e.path().is_dir())
         .enumerate()
         .map(|(i, e)| {
+            let path = e.path();
             let name = e.file_name().to_string_lossy().to_string();
             let is_current = name == current_name;
-            ModelMenuItem { index: i, name, is_current }
+            let size_label = model_dir_size_label(&path);
+            ModelMenuItem { index: i, name, is_current, size_label }
         })
         .collect();
 
@@ -355,12 +380,15 @@ fn main() -> Result<()> {
                             }
                             let streaming_enabled = ui::is_streaming_enabled();
                             let chunk_seconds = ui::streaming_chunk_seconds();
-                            let status = format_recording_status(
+                            let mut status = format_recording_status(
                                 elapsed,
                                 streaming_enabled,
                                 chunk_seconds,
                                 &whisper_status_text,
                             );
+                            if elapsed_sec >= 30 {
+                                status.push_str("\nTip: tap hotkey again to stop");
+                            }
                             overlay_clone.update_status_text(&status);
                         }
                     }
@@ -663,6 +691,10 @@ fn main() -> Result<()> {
                             }
                         }
                     };
+
+                    // Normalize whitespace: faster-whisper sometimes inserts double spaces
+                    // between segments; split_whitespace + join gives clean single spaces.
+                    let raw_text: String = raw_text.split_whitespace().collect::<Vec<_>>().join(" ");
 
                     if raw_text.is_empty() {
                         info!("No text transcribed");

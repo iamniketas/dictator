@@ -62,6 +62,8 @@ pub struct ModelMenuItem {
     pub index: usize,
     pub name: String,
     pub is_current: bool,
+    /// Human-readable size string, e.g. " (3.1 GB)". Empty if unknown.
+    pub size_label: String,
 }
 
 /// Set the callback for opening history folder
@@ -425,7 +427,8 @@ unsafe fn show_context_menu(hwnd: HWND) {
                 for model in &models {
                     let flag = if model.is_current { MF_CHECKED } else { MF_UNCHECKED };
                     let menu_id = ID_MODEL_START + model.index as u16;
-                    let wide: Vec<u16> = model.name.encode_utf16().chain(std::iter::once(0)).collect();
+                    let display = format!("{}{}", model.name, model.size_label);
+                    let wide: Vec<u16> = display.encode_utf16().chain(std::iter::once(0)).collect();
                     let _ = AppendMenuW(
                         menu,
                         flag | MF_STRING,
