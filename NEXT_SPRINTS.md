@@ -77,20 +77,21 @@
 
 ## Sprint C: Shared Infrastructure
 
-### C1: Shared Whisper Models Directory
+### C1: Shared Whisper Models Directory ✅ DONE (2026-03-06)
 - Both Dictator and Contora point to same model files
-- Default: `%LocalAppData%\whisper-models\` (Win), `~/Library/Application Support/whisper-models/` (Mac)
+- Resolution order: config `models_dir` → `WHISPER_MODELS_DIR` env var → `%LocalAppData%\whisper-models\` (if exists) → `model_path` parent
 - Environment variable override: `WHISPER_MODELS_DIR`
 
-### C2: Memory Management (P1)
-- Auto-unload models from VRAM/RAM after idle (default: 5 min)
-- Config: `memory.idle_unload_minutes` (0 = never)
-- Pre-warm on hotkey press
+### C2: Memory Management ✅ DONE (2026-03-06)
+- Auto-unload whisper server after idle (default: 5 min)
+- Config: `[memory] idle_unload_minutes` (0 = never)
+- Server stays running between recordings; idle timer stops it
+- `stop_if_owned()` retained only on hard errors (audio/transcription failure)
 
-### C3: History Module (P1)
-- Shared JSON format (see `shared/contracts/README.md`)
-- Store last 50 entries, configurable
-- Optional audio file retention with auto-cleanup
+### C3: History Module (P1) ✅ DONE (earlier)
+- JSON metadata + WAV audio + TXT per recording in `recordings/YYYY-MM-DD/`
+- Configurable retention_days (default 7), max_recent in tray (default 5)
+- "Open Folder" and "Copy to Clipboard" tray actions
 
 ---
 
@@ -139,8 +140,10 @@
 
 ## Priority Order
 
-1. **Sprint A** (Windows P0) — immediate, makes product usable daily
-2. **Sprint B1-B2** (macOS modularization + WhisperKit) — can run in parallel on macOS machine
-3. **Sprint C1** (shared models) — enables Contora integration
-4. **Sprint D1-D2** (model research) — informs future architecture
-5. **Sprint C2-C3** (memory + history) — Phase 2 polish
+1. **Sprint A** (Windows P0) ✅ DONE
+2. **Sprint B1-B2** (macOS modularization + WhisperKit) — macOS machine only
+3. **Sprint C1** (shared models) ✅ DONE
+4. **Sprint C2** (memory management) ✅ DONE
+5. **Sprint C3** (history) ✅ DONE (earlier)
+6. **Sprint D1-D2** (model research) — informs future architecture
+7. **Sprint D3** (embedded whisper-rs) — eliminates Python dependency

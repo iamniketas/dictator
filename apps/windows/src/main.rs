@@ -251,6 +251,8 @@ fn main() -> Result<()> {
         let mut avg_transcribe_ratio: f32 = 0.20;
         let mut whisper_ready = false;
         let mut whisper_status_text = String::from("Whisper: idle");
+        let mut last_transcription_time: Option<Instant> = None;
+        let idle_unload_minutes = config_clone.memory.idle_unload_minutes;
         let mut whisper_manager = WhisperServerManager::new(
             config_clone
                 .whisper
@@ -305,6 +307,21 @@ fn main() -> Result<()> {
                                 &whisper_status_text,
                             );
                             overlay_clone.update_status_text(&status);
+                        }
+                    }
+                    // Idle unload: stop whisper server after N minutes of inactivity
+                    if idle_unload_minutes > 0 && !is_recording {
+                        if let Some(last) = last_transcription_time {
+                            if last.elapsed() >= Duration::from_secs(idle_unload_minutes as u64 * 60) {
+                                if whisper_manager.is_server_running() {
+                                    info!(
+                                        "[MAIN] Idle timeout ({} min): unloading whisper server",
+                                        idle_unload_minutes
+                                    );
+                                    whisper_manager.stop_if_owned();
+                                }
+                                last_transcription_time = None;
+                            }
                         }
                     }
                     // No hotkey event, continue to check streaming events and recording progress
@@ -502,7 +519,6 @@ fn main() -> Result<()> {
                     if audio_data.is_empty() {
                         info!("No audio recorded");
                         overlay_clone.hide();
-                        whisper_manager.stop_if_owned();
                         continue;
                     }
 
@@ -596,7 +612,6 @@ fn main() -> Result<()> {
                     if raw_text.is_empty() {
                         info!("No text transcribed");
                         overlay_clone.hide();
-                        whisper_manager.stop_if_owned();
                         continue;
                     }
 
@@ -646,7 +661,9 @@ fn main() -> Result<()> {
                     // Hide overlay after delay
                     std::thread::sleep(std::time::Duration::from_secs(2));
                     overlay_clone.hide();
-                    whisper_manager.stop_if_owned();
+
+                    // Update last activity time for idle unload timer
+                    last_transcription_time = Some(Instant::now());
 
                     // Save recording to history (if enabled)
                     if config_clone.history.enabled {

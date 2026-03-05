@@ -18,6 +18,28 @@ pub struct Config {
     pub history: HistoryConfig,
     #[serde(default)]
     pub injection: InjectionConfig,
+    #[serde(default)]
+    pub memory: MemoryConfig,
+}
+
+/// Memory management configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemoryConfig {
+    /// Minutes of inactivity before auto-unloading the whisper server (0 = never)
+    #[serde(default = "default_idle_unload_minutes")]
+    pub idle_unload_minutes: u32,
+}
+
+fn default_idle_unload_minutes() -> u32 {
+    5
+}
+
+impl Default for MemoryConfig {
+    fn default() -> Self {
+        Self {
+            idle_unload_minutes: default_idle_unload_minutes(),
+        }
+    }
 }
 
 /// History storage configuration
@@ -88,9 +110,24 @@ pub struct WhisperConfig {
 
 impl WhisperConfig {
     /// Returns the directory to scan for models.
+    ///
+    /// Resolution order:
+    /// 1. Explicit `[whisper] models_dir` in config
+    /// 2. `WHISPER_MODELS_DIR` environment variable
+    /// 3. Shared directory `%LocalAppData%\whisper-models\` (shared with Contora), if it exists
+    /// 4. Parent directory of `model_path`
     pub fn effective_models_dir(&self) -> Option<PathBuf> {
         if let Some(ref dir) = self.models_dir {
             return Some(dir.clone());
+        }
+        if let Ok(env_dir) = std::env::var("WHISPER_MODELS_DIR") {
+            return Some(PathBuf::from(env_dir));
+        }
+        if let Some(local_app_data) = dirs::data_local_dir() {
+            let shared_dir = local_app_data.join("whisper-models");
+            if shared_dir.exists() {
+                return Some(shared_dir);
+            }
         }
         self.model_path.parent().map(|p| p.to_path_buf())
     }
@@ -165,6 +202,7 @@ impl Default for Config {
             },
             history: HistoryConfig::default(),
             injection: InjectionConfig::default(),
+            memory: MemoryConfig::default(),
         }
     }
 }
@@ -235,5 +273,43 @@ mod tests {
         let config = Config::default();
         assert_eq!(config.hotkey.key, "right_alt");
         assert_eq!(config.audio.sample_rate, 16000);
+        assert_eq!(config.memory.idle_unload_minutes, 5);
+    }
+
+    #[test]
+    fn test_backward_compat_no_memory_section() {
+        let toml = r#"
+[hotkey]
+modifiers = []
+key = "right_alt"
+
+[audio]
+sample_rate = 16000
+
+[whisper]
+model_path = "models/ggml-large-v3.bin"
+language = "ru"
+
+[ollama]
+enabled = false
+url = "http://localhost:11434"
+model = "glm-4.7-flash"
+"#;
+        let config: Config = toml::from_str(toml).expect("should parse without [memory]");
+        assert_eq!(config.memory.idle_unload_minutes, 5);
+    }
+
+    #[test]
+    fn test_whisper_models_dir_env_var() {
+        // SAFETY: single-threaded test, no concurrent env access
+        unsafe { std::env::set_var("WHISPER_MODELS_DIR", "C:\\models\\shared") };
+        let whisper = WhisperConfig {
+            model_path: PathBuf::from("models/ggml-large-v3.bin"),
+            language: "ru".into(),
+            models_dir: None,
+        };
+        let dir = whisper.effective_models_dir();
+        unsafe { std::env::remove_var("WHISPER_MODELS_DIR") };
+        assert_eq!(dir, Some(PathBuf::from("C:\\models\\shared")));
     }
 }

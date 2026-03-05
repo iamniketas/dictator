@@ -111,6 +111,10 @@ impl WhisperServerManager {
         self.owns_process = false;
     }
 
+    pub fn is_server_running(&self) -> bool {
+        self.child.is_some()
+    }
+
     pub fn is_healthy() -> bool {
         let client = match reqwest::blocking::Client::builder()
             .timeout(Duration::from_millis(800))
