@@ -197,7 +197,7 @@ impl Default for Config {
         Self {
             hotkey: HotkeyConfig {
                 modifiers: vec![],
-                key: "right_alt".into(),
+                key: "right_ctrl".into(),
             },
             audio: AudioConfig {
                 device: None,
@@ -289,7 +289,7 @@ mod tests {
     #[test]
     fn test_default_config() {
         let config = Config::default();
-        assert_eq!(config.hotkey.key, "right_alt");
+        assert_eq!(config.hotkey.key, "right_ctrl");
         assert_eq!(config.audio.sample_rate, 16000);
         assert_eq!(config.memory.idle_unload_minutes, 5);
     }

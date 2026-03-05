@@ -4,7 +4,7 @@
 use anyhow::Result;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
 use tracing::{error, info, warn};
@@ -194,7 +194,7 @@ fn model_dir_size_label(path: &std::path::Path) -> String {
     }
 }
 
-fn scan_available_models(config: &Config) -> Vec<ModelMenuItem> {
+fn scan_available_models(config: &Config, current_path: &std::path::Path) -> Vec<ModelMenuItem> {
     let Some(models_dir) = config.whisper.effective_models_dir() else {
         return Vec::new();
     };
@@ -203,9 +203,7 @@ fn scan_available_models(config: &Config) -> Vec<ModelMenuItem> {
         return Vec::new();
     };
 
-    let current_name = config
-        .whisper
-        .model_path
+    let current_name = current_path
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_default();
@@ -347,6 +345,10 @@ fn main() -> Result<()> {
     // Create embedded whisper engine (lazy — model loads on first transcription)
     let shared_engine: SharedEngine = whisper_engine::new_shared_engine();
 
+    // Shared active model path — updated at runtime when user switches or downloads a model.
+    // The event thread reads from this, so model changes take effect without restarting.
+    let active_model_path = Arc::new(RwLock::new(config.whisper.model_path.clone()));
+
     // Create shared audio recorder
     let recorder = Arc::new(AudioRecorder::new()?);
 
@@ -437,6 +439,8 @@ fn main() -> Result<()> {
     // Handle a download request from the tray
     let config_for_dl = config.clone();
     let overlay_for_dl = overlay.clone();
+    let active_model_path_for_dl = active_model_path.clone();
+    let engine_for_dl = shared_engine.clone();
     ui::set_download_model_callback(move |index| {
         let Some(model) = model_downloader::KNOWN_MODELS.get(index) else {
             return;
@@ -452,6 +456,8 @@ fn main() -> Result<()> {
 
         let overlay = overlay_for_dl.clone();
         let config_snapshot = config_for_dl.clone();
+        let active_path = active_model_path_for_dl.clone();
+        let engine = engine_for_dl.clone();
 
         thread::spawn(move || {
             ui::set_is_downloading(true);
@@ -471,7 +477,13 @@ fn main() -> Result<()> {
                 Ok(path) => {
                     info!("[DOWNLOAD] Model saved to: {:?}", path);
 
-                    // Update config.toml to point at the new model
+                    // Hot-switch to the new model — no restart needed
+                    if let Ok(mut guard) = active_path.write() {
+                        *guard = path.clone();
+                    }
+                    whisper_engine::unload_engine(&engine);
+
+                    // Persist to config.toml
                     let mut updated = config_snapshot.clone();
                     updated.whisper.model_path = path.clone();
                     if let Err(e) = updated.save() {
@@ -480,11 +492,8 @@ fn main() -> Result<()> {
                         info!("[DOWNLOAD] config.toml updated: model_path = {:?}", path);
                     }
 
-                    overlay.show(&format!(
-                        "Downloaded {} \u{2713}\nRestart Dictator to use this model.",
-                        name
-                    ));
-                    thread::sleep(Duration::from_secs(4));
+                    overlay.show(&format!("Downloaded {} \u{2713}\nReady to use!", name));
+                    thread::sleep(Duration::from_secs(3));
                     overlay.hide();
                 }
                 Err(e) => {
@@ -498,8 +507,8 @@ fn main() -> Result<()> {
     });
 
     // ── On first launch: show a hint if no model is found ───────────────────
-    if config.whisper.backend == WhisperBackend::Embedded
-        && !config.whisper.model_path.is_file()
+    let initial_model_ok = active_model_path.read().map(|p| p.is_file()).unwrap_or(false);
+    if config.whisper.backend == WhisperBackend::Embedded && !initial_model_ok
     {
         let overlay_for_hint = overlay.clone();
         thread::spawn(move || {
@@ -513,26 +522,43 @@ fn main() -> Result<()> {
 
     // Set up model selector callbacks
     let config_for_models = config.clone();
+    let active_model_path_for_list = active_model_path.clone();
     ui::set_model_list_callback(move || {
-        scan_available_models(&config_for_models)
+        let current = active_model_path_for_list
+            .read()
+            .map(|g| g.clone())
+            .unwrap_or_default();
+        scan_available_models(&config_for_models, &current)
     });
 
     let config_for_select = config.clone();
+    let active_model_path_for_select = active_model_path.clone();
+    let engine_for_select = shared_engine.clone();
     ui::set_model_select_callback(move |index| {
-        let models = scan_available_models(&config_for_select);
+        let current = active_model_path_for_select
+            .read()
+            .map(|g| g.clone())
+            .unwrap_or_default();
+        let models = scan_available_models(&config_for_select, &current);
         if let Some(model) = models.get(index) {
-            let mut updated = config_for_select.clone();
-            updated.whisper.model_path = config_for_select
+            let new_path = config_for_select
                 .whisper
                 .effective_models_dir()
                 .unwrap_or_default()
                 .join(&model.name);
+
+            // Hot-switch: update shared path + unload engine (reloads on next recording)
+            if let Ok(mut guard) = active_model_path_for_select.write() {
+                *guard = new_path.clone();
+            }
+            whisper_engine::unload_engine(&engine_for_select);
+
+            let mut updated = config_for_select.clone();
+            updated.whisper.model_path = new_path.clone();
             if let Err(e) = updated.save() {
                 error!("[MAIN] Failed to save config after model switch: {}", e);
             } else {
-                info!("[MAIN] Switched model to: {}", model.name);
-                // For embedded backend, the engine must be reloaded on next use
-                // (whisper_manager restart handled separately for server backend)
+                info!("[MAIN] Hot-switched model to: {:?}", new_path);
             }
         }
     });
@@ -555,6 +581,7 @@ fn main() -> Result<()> {
     let streaming_tx_clone = streaming_tx.clone();
     let history_clone = history.clone();
     let engine_clone = shared_engine.clone();
+    let active_model_path_clone = active_model_path.clone();
 
     std::thread::spawn(move || {
         let history = history_clone;
@@ -795,12 +822,16 @@ fn main() -> Result<()> {
                             let chunk_seconds = ui::streaming_chunk_seconds();
                             info!("[MAIN] Streaming chunk duration: {}s", chunk_seconds);
                             streaming_transcriber = Some(if is_embedded {
+                                let model_path = active_model_path_clone
+                                    .read()
+                                    .map(|g| g.clone())
+                                    .unwrap_or_default();
                                 StreamingTranscriber::new_embedded(
                                     streaming_tx_clone.clone(),
                                     config_clone.whisper.language.clone(),
                                     chunk_seconds,
                                     engine.clone(),
-                                    config_clone.whisper.model_path.clone(),
+                                    model_path,
                                 )
                             } else {
                                 StreamingTranscriber::new(
@@ -926,7 +957,10 @@ fn main() -> Result<()> {
                         let (transcribe_tx, transcribe_rx) = mpsc::channel();
 
                         let engine_for_transcribe = engine.clone();
-                        let model_path_for_transcribe = config_clone.whisper.model_path.clone();
+                        let model_path_for_transcribe = active_model_path_clone
+                            .read()
+                            .map(|g| g.clone())
+                            .unwrap_or_default();
                         std::thread::spawn(move || {
                             let result = if is_embedded {
                                 whisper_engine::transcribe_with_engine(

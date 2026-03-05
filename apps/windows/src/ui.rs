@@ -405,7 +405,7 @@ unsafe extern "system" fn window_proc(
                 } else if cmd == ID_ABOUT {
                     let _ = MessageBoxW(
                         hwnd,
-                        w!("Dictator v0.1.0-alpha\r\nVoice dictation for Windows\r\n\r\nHotkey: Right Alt\r\n  Hold >300ms \u{2192} Push-to-Talk\r\n  Tap          \u{2192} Toggle mode\r\n\r\nRuns 100% locally. No cloud, no telemetry.\r\n\r\nhttps://github.com/"),
+                        w!("Dictator v0.1.0-alpha\r\nVoice dictation for Windows\r\n\r\nHotkey: Right Ctrl\r\n  Hold >300ms \u{2192} Push-to-Talk\r\n  Tap          \u{2192} Toggle mode\r\n\r\nRuns 100% locally. No cloud, no telemetry.\r\n\r\nhttps://github.com/iamniketas/dictator"),
                         w!("About Dictator"),
                         MB_OK | MB_ICONINFORMATION,
                     );

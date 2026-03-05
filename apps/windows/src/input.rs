@@ -14,8 +14,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
 /// Hold duration threshold: above = Push-to-Talk, below = Toggle
 const PTT_THRESHOLD_MS: u64 = 300;
 
-/// VK_RMENU — Right Alt key (0xA5)
-const TARGET_VK: u32 = 0xA5;
+/// VK_RCONTROL — Right Ctrl key (0xA3)
+const TARGET_VK: u32 = 0xA3;
 
 struct HotkeyListenerState {
     /// true = toggle recording is active, next key down will stop
@@ -76,7 +76,7 @@ pub fn set_foreground_window(hwnd_value: isize) -> anyhow::Result<()> {
 }
 
 /// Start hotkey listener in a separate thread.
-/// Right Alt behavior:
+/// Right Ctrl behavior:
 ///   - Hold >300ms → Push-to-Talk: recording stops on key release
 ///   - Tap <300ms  → Toggle: first tap starts, second tap stops
 pub fn start_hotkey_listener(tx: mpsc::Sender<HotkeyEvent>) -> thread::JoinHandle<()> {

@@ -235,6 +235,61 @@ Or switch to embedded (recommended):
 
 ---
 
+---
+
+## Sprint I: Right Ctrl Hotkey + Hot Reload
+
+### I1: Switch hotkey from Right Alt to Right Ctrl
+- VK_RCONTROL (0xA3) instead of VK_RMENU (0xA5)
+- Right Alt conflicts with Birman typographic keyboard layout
+
+### I2: Hot reload after model switch (no restart)
+- `Arc<RwLock<PathBuf>>` for active model path — shared between UI callbacks and event thread
+- After model switch or download: update shared path + unload engine
+- Next recording loads new model automatically — no restart needed
+
+---
+
+## Sprint K: Tray Cleanup
+
+### K1: Slim down tray to quick actions only
+- Remove streaming/chunk controls from tray (move to Settings window)
+- Remove Download Model submenu from tray (move to Settings window)
+- Keep: model selector (quick switch), last 3 recent recordings, Settings, Exit
+- Add "Settings..." item that opens the settings window
+
+---
+
+## Sprint L: Settings Window
+
+### L1: Native Win32 settings window
+- Triggered from tray → "Settings..."
+- Sections:
+  - **Models** — list of downloaded models (name, size, active), download button, delete button
+  - **Hotkey** — current hotkey display, picker
+  - **General** — injection method, idle unload timeout, LLM toggle + Ollama URL/model
+  - **About** — version, open logs folder, open config file, GitHub link
+- Native Win32 controls (no external UI framework)
+
+---
+
+## Sprint M: Auto-Updater (Velopack)
+
+### M1: Velopack integration
+- Crate: `velopack` (same library Contora uses, has official Rust support)
+- `VelopackApp::build().run()` at startup (required for update finalization)
+- GitHub Releases as update channel (`https://github.com/iamniketas/dictator`)
+- Background update check on startup (non-blocking thread)
+- Tray: "Check for Updates" → "Update available (v1.x) — Install & Restart"
+- After user approves: download + `apply_then_restart()`
+
+### M2: Release packaging
+- `vpk pack` script to build installer/package
+- GitHub Actions workflow: build → pack → create release
+- Distributable: single `.exe` installer (no manual build required)
+
+---
+
 ## Priority Order
 
 1. **Sprint A** (Windows P0) ✅ DONE
@@ -247,4 +302,8 @@ Or switch to embedded (recommended):
 8. **Sprint G** (CLI remote control + About) ✅ DONE
 9. **Sprint D3** (embedded whisper-rs) ✅ DONE
 10. **Sprint H** (in-app model downloader) ✅ DONE
-11. **Sprint D1-D2** (model research) — informs future architecture
+11. **Sprint I** (Right Ctrl + hot reload) — in progress
+12. **Sprint K** (tray cleanup) — depends on L
+13. **Sprint L** (settings window) — unblocks K
+14. **Sprint M** (Velopack auto-updater) — requires GitHub releases
+15. **Sprint D1-D2** (model research) — informs future architecture
