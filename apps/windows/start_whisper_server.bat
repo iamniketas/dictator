@@ -11,11 +11,11 @@ echo Starting Whisper HTTP Server on port %WHISPER_PORT%...
 echo Default model path: %DEFAULT_MODEL_PATH%
 
 if not "%~1"=="" (
-    python whisper_server.py "%~1"
+    python "%SCRIPT_DIR%..\..\shared\whisper-server\whisper_server.py" "%~1"
 ) else if not "%WHISPER_MODEL_PATH%"=="" (
-    python whisper_server.py "%WHISPER_MODEL_PATH%"
+    python "%SCRIPT_DIR%..\..\shared\whisper-server\whisper_server.py" "%WHISPER_MODEL_PATH%"
 ) else (
-    python whisper_server.py "%DEFAULT_MODEL_PATH%"
+    python "%SCRIPT_DIR%..\..\shared\whisper-server\whisper_server.py" "%DEFAULT_MODEL_PATH%"
 )
 
 endlocal

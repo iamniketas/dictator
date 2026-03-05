@@ -3,7 +3,6 @@ target/
 .build/
 **/.build/
 *.rs.bk
-Cargo.lock
 
 # Temporary files
 *.wav
@@ -33,7 +32,6 @@ glm-64k.ModelfileNUL
 orchestrator.db
 __pycache__/
 .orchestrator/
-examples/
 
 # Local Whisper models (keep lightweight docs only)
 models/**
@@ -44,3 +42,12 @@ models/**
 # Recordings (audio + transcriptions) - stored locally, never committed
 recordings/
 !recordings/.gitkeep
+
+# Orchestrator logs
+orch*.log
+orchestrator*.log
+
+# Misc
+open.url
+*.ico.bak
+screen*.jpg

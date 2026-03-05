@@ -1,0 +1,144 @@
+# Next Sprints — Dictator Development Plan
+
+> Last updated: 2026-03-05
+> Repository migrated to multi-platform structure.
+
+---
+
+## Current State
+
+- **Windows (Rust):** v0.1.0-alpha in `apps/windows/`, build: `cd apps/windows && cargo build`
+- **macOS (Swift):** Prototype in `apps/macos/`, single-file `main.swift` (~60KB)
+- **Shared:** Whisper server in `shared/whisper-server/`, contracts in `shared/contracts/`
+- **CI:** GitHub Actions for Windows (`apps/windows/` scope)
+
+---
+
+## Sprint A: Windows — Phase 1 MVP+ (P0 features from ROADMAP)
+
+**Goal:** Make Dictator competitive as a daily driver on Windows.
+
+### A1: Smart Hotkeys (MEDIUM)
+- Implement dual mode: Push-to-Talk (hold) + Toggle (double-click)
+- Single hotkey, behavior depends on press pattern
+- Reference: Wispr Flow double-click pattern
+- Files: `apps/windows/src/input.rs`
+
+### A2: Audio Waveform Overlay (LOW)
+- Show real-time microphone amplitude (volume wave) in overlay
+- Replace current static "REC" indicator
+- Files: `apps/windows/src/overlay_win32.rs`, `apps/windows/src/audio.rs`
+
+### A3: Flexible Text Injection (LOW-MEDIUM)
+- Add injection modes: direct (SendInput), clipboard, clipboard+Enter
+- Config option `injection.method`
+- Preserve original clipboard contents when using clipboard mode
+- Files: `apps/windows/src/input.rs`, `apps/windows/src/config.rs`
+
+### A4: Model Selector in Tray Menu (MEDIUM)
+- List available models in tray context menu
+- Switch model without editing TOML
+- Show current model name in menu
+- Files: `apps/windows/src/ui.rs`, `apps/windows/src/config.rs`
+
+---
+
+## Sprint B: macOS — MVP Foundation
+
+**Goal:** Get macOS client to feature parity with Windows basic pipeline.
+
+### B1: Modularize main.swift
+- Split 60KB single file into proper Swift modules:
+  - `AudioCaptureService.swift`
+  - `TranscriptionService.swift`
+  - `HotkeyManager.swift`
+  - `TextInjectionService.swift`
+  - `OverlayView.swift`
+  - `SettingsStore.swift`
+  - `AppState.swift`
+
+### B2: WhisperKit Integration
+- Replace HTTP server dependency with WhisperKit (CoreML/Metal/ANE)
+- Evaluate performance on M1/M2/M3
+- Keep HTTP fallback for older Macs without ANE
+
+### B3: Text Injection Reliability
+- Pasteboard + CGEvent (Cmd+V) as primary method
+- Accessibility permission flow with onboarding guide
+- Fallback: clipboard-only mode
+
+### B4: Streaming Transcription
+- Chunk-based pipeline matching Windows behavior
+- Overlay/status panel for partial results
+
+---
+
+## Sprint C: Shared Infrastructure
+
+### C1: Shared Whisper Models Directory
+- Both Dictator and Contora point to same model files
+- Default: `%LocalAppData%\whisper-models\` (Win), `~/Library/Application Support/whisper-models/` (Mac)
+- Environment variable override: `WHISPER_MODELS_DIR`
+
+### C2: Memory Management (P1)
+- Auto-unload models from VRAM/RAM after idle (default: 5 min)
+- Config: `memory.idle_unload_minutes` (0 = never)
+- Pre-warm on hotkey press
+
+### C3: History Module (P1)
+- Shared JSON format (see `shared/contracts/README.md`)
+- Store last 50 entries, configurable
+- Optional audio file retention with auto-cleanup
+
+---
+
+## Sprint D: Research & Evaluation
+
+### D1: Parakeet V3 (NVIDIA NeMo)
+- Evaluate as alternative/complement to Whisper
+- CPU-friendly (~5x realtime), auto language detection
+- Reference: Handy integration (MIT licensed)
+
+### D2: Model Comparison Matrix
+- Test on identical audio samples:
+  - faster-whisper large-v2 (CUDA)
+  - Parakeet V3 (CPU + CUDA)
+  - WhisperKit (Apple Silicon)
+  - Distil-Whisper (faster, lower quality)
+- Metrics: latency, WER (word error rate), VRAM usage, CPU usage
+
+### D3: Embedded Whisper (whisper-rs)
+- Replace HTTP server with direct Rust binding
+- Eliminates Python dependency on Windows
+- Requires VS 2022 with C++ toolchain
+
+---
+
+## Questions Inspired by Handy Research
+
+### Architecture
+1. **Parakeet V3 integration** — Handy shows it works well for CPU-only users. Should we support it as a lightweight alternative for machines without NVIDIA GPU?
+2. **Silero VAD** — Handy uses Silero for voice activity detection. Our current VAD relies on Whisper's built-in. Is dedicated VAD worth the complexity for better pause detection?
+3. **whisper-rs vs HTTP server** — Handy embeds whisper.cpp directly via `whisper-rs`. This eliminates the Python dependency but requires C++ toolchain. When should we make this transition for Windows?
+
+### UX
+4. **Remote control via CLI** — Handy supports `--toggle`, `--stop` flags for scripting. Should Dictator expose a local socket/pipe for automation?
+5. **Debug mode** — Handy has a keyboard shortcut to toggle debug overlay. Should we add similar diagnostics (latency, VRAM, model info)?
+
+### Models
+6. **Model auto-download** — Handy downloads models on demand from the app. Should we build a model manager (download, verify, switch) instead of requiring manual setup?
+7. **Model size tiers** — Handy offers small/medium/turbo/large. Should our model selector show speed/quality/size comparison?
+
+### Cross-platform
+8. **Wayland support** — Handy documents significant issues with Wayland (hotkeys, text injection). For our Linux client, should we target X11 first and Wayland as best-effort?
+9. **Single-instance enforcement** — Handy uses a plugin for this. We should implement named mutex (Win) / file lock (Unix) to prevent duplicate instances.
+
+---
+
+## Priority Order
+
+1. **Sprint A** (Windows P0) — immediate, makes product usable daily
+2. **Sprint B1-B2** (macOS modularization + WhisperKit) — can run in parallel on macOS machine
+3. **Sprint C1** (shared models) — enables Contora integration
+4. **Sprint D1-D2** (model research) — informs future architecture
+5. **Sprint C2-C3** (memory + history) — Phase 2 polish

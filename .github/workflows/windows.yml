@@ -4,12 +4,21 @@ on:
   push:
     branches:
       - main
+    paths:
+      - 'apps/windows/**'
+      - 'shared/**'
   pull_request:
+    paths:
+      - 'apps/windows/**'
+      - 'shared/**'
   workflow_dispatch:
 
 jobs:
   build-and-test:
     runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: apps/windows
 
     steps:
       - name: Checkout
@@ -20,6 +29,8 @@ jobs:
 
       - name: Cache cargo build artifacts
         uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/windows
 
       - name: Cargo check
         run: cargo check --all-targets

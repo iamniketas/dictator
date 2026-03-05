@@ -576,10 +576,10 @@ impl ApplicationHandler<OverlayCommand> for OverlayApp {
                 let needs_redraw = state.is_recording;
                 drop(state);
 
-                if needs_redraw {
-                    if let Some(window) = self.window.as_ref() {
-                        window.request_redraw();
-                    }
+                if needs_redraw
+                    && let Some(window) = self.window.as_ref()
+                {
+                    window.request_redraw();
                 }
             }
             OverlayCommand::SetPosition(x, y) => {
@@ -680,10 +680,10 @@ impl OverlayWindow {
                 }
 
                 // Wait for previous animation thread to finish
-                if let Ok(mut anim_thread) = self.animation_thread.lock() {
-                    if let Some(handle) = anim_thread.take() {
-                        let _ = handle.join();
-                    }
+                if let Ok(mut anim_thread) = self.animation_thread.lock()
+                    && let Some(handle) = anim_thread.take()
+                {
+                    let _ = handle.join();
                 }
 
                 // Start new animation thread
@@ -699,10 +699,10 @@ impl OverlayWindow {
                 let handle = thread::spawn(move || {
                     loop {
                         // Check if we should stop
-                        if let Ok(stop) = stop_flag.lock() {
-                            if *stop {
-                                break;
-                            }
+                        if let Ok(stop) = stop_flag.lock()
+                            && *stop
+                        {
+                            break;
                         }
 
                         // Send animation tick every 1000ms
@@ -722,10 +722,10 @@ impl OverlayWindow {
                 }
 
                 // Wait for animation thread to finish
-                if let Ok(mut anim_thread) = self.animation_thread.lock() {
-                    if let Some(handle) = anim_thread.take() {
-                        let _ = handle.join();
-                    }
+                if let Ok(mut anim_thread) = self.animation_thread.lock()
+                    && let Some(handle) = anim_thread.take()
+                {
+                    let _ = handle.join();
                 }
             }
         }
@@ -801,10 +801,10 @@ impl Drop for OverlayWindow {
             *stop = true;
         }
 
-        if let Ok(mut anim_thread) = self.animation_thread.lock() {
-            if let Some(handle) = anim_thread.take() {
-                let _ = handle.join();
-            }
+        if let Ok(mut anim_thread) = self.animation_thread.lock()
+            && let Some(handle) = anim_thread.take()
+        {
+            let _ = handle.join();
         }
 
         if let Some(proxy) = self.event_loop_proxy.take() {

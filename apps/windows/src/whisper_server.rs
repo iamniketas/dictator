@@ -80,12 +80,12 @@ impl WhisperServerManager {
             return Ok(true);
         }
 
-        if let Some(child) = self.child.as_mut() {
-            if let Some(status) = child.try_wait().context("Failed to poll server process")? {
-                self.child = None;
-                self.owns_process = false;
-                anyhow::bail!("Whisper server exited early with status: {}", status);
-            }
+        if let Some(child) = self.child.as_mut()
+            && let Some(status) = child.try_wait().context("Failed to poll server process")?
+        {
+            self.child = None;
+            self.owns_process = false;
+            anyhow::bail!("Whisper server exited early with status: {}", status);
         }
 
         Ok(false)

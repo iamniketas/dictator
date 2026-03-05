@@ -250,7 +250,7 @@ fn audio_thread(
                                 let ratio = sample_rate as f32 / 16000.0;
                                 let mono_len = raw_data.len() / channels as usize;
                                 let converted_len = (mono_len as f32 / ratio) as usize;
-                                if raw_data.len() > 0 {
+                                if !raw_data.is_empty() {
                                     (last_idx * converted_len) / raw_data.len()
                                 } else {
                                     0

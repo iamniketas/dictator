@@ -1,184 +1,113 @@
-# Dictator 🎤
+# Dictator
 
-**Voice dictation service for Windows** that converts speech to text using local AI models. The application runs as a background service with system tray integration and is activated via global hotkey.
+**Local voice dictation** — converts speech to text using on-device AI models. No cloud, no subscriptions, no data leaves your machine.
 
-## Features
+Cross-platform project with native clients per OS.
 
-- 🎤 **Global Hotkey** — Press `Ctrl+Shift+D` to start/stop recording
-- 🔊 **Audio Capture** — Records from microphone (16 kHz mono, auto-conversion from device format)
-- 🤖 **AI Transcription** — Uses [faster-whisper](https://github.com/SYSTRAN/faster-whisper) with CUDA support
-- ✍️ **Text Injection** — Automatically inserts transcribed text into active window
-- 🧠 **LLM Correction** — Optional text correction via Ollama (Qwen3 30B)
-- 🪟 **System Tray** — Runs in background, minimal UI
+## Platform Clients
 
-## Architecture
+| Platform | Stack | Status | Path |
+|----------|-------|--------|------|
+| **Windows** | Rust + Win32 API | v0.1.0-alpha | [`apps/windows/`](apps/windows/) |
+| **macOS** | Swift + SwiftUI/AppKit | Prototype | [`apps/macos/`](apps/macos/) |
+| **Linux** | TBD | Planned | — |
+
+## Core Pipeline (all platforms)
 
 ```
-Audio Capture (cpal)
-    ↓
-Resample to 16kHz mono
-    ↓
-HTTP → Whisper Server (Flask + faster-whisper)
-    ↓
-Transcribed Text
-    ↓
-[Optional] Ollama LLM Correction
-    ↓
-Text Injection (SendInput Win32 API)
+Hotkey (start/stop)
+    -> Audio Capture (platform-native)
+    -> Transcription (local ML model)
+    -> [Optional] LLM Correction (Ollama)
+    -> Text Injection (into active window)
 ```
 
-### Why HTTP Server?
+## Transcription Engines
 
-The Whisper model is **3 GB** and takes **5-10 seconds to load**. Running it as an HTTP server keeps the model in memory, reducing transcription time from ~10s to **~1-2 seconds**.
+| Engine | Platform | Acceleration | Notes |
+|--------|----------|-------------|-------|
+| faster-whisper (Python HTTP) | Windows, Linux | CUDA | Current default |
+| WhisperKit | macOS | CoreML / Metal / ANE | Apple Silicon optimized |
+| Parakeet V3 (NVIDIA) | Windows, Linux | CUDA / CPU | Research candidate |
+| whisper.cpp | All | CPU / CUDA / Metal | Fallback option |
 
-## Prerequisites
+## Shared Infrastructure
 
-### 1. Python 3.13+ with Dependencies
+- **Whisper HTTP Server** — [`shared/whisper-server/`](shared/whisper-server/) — Python Flask server wrapping faster-whisper, shared with other local projects
+- **Contracts** — [`shared/contracts/`](shared/contracts/) — cross-platform config schema, pipeline states, history format
+- **Documentation** — [`docs/`](docs/)
+
+## Design Principles
+
+1. **Local-first** — all processing on-device, zero cloud dependency
+2. **Native UX** — platform-specific UI following each OS guidelines
+3. **Minimal footprint** — tray/menubar app, overlay only during recording
+4. **Resource-aware** — auto-unload models from VRAM after idle (default: 5 min)
+5. **Open** — Apache 2.0 license, forkable architecture
+
+## Anti-patterns (what we deliberately avoid)
+
+- Persistent desktop widgets
+- Paywalls on local features
+- Hidden cloud processing
+- Excessive system permissions
+- In-app marketing
+
+## Quick Start
+
+### Windows
 ```bash
-pip install flask faster-whisper
+cd apps/windows
+cargo build --release
+# See apps/windows/README.md for full instructions
 ```
 
-### 2. Whisper Model
-Download a [faster-whisper model](https://huggingface.co/Systran/faster-whisper-large-v2) (e.g., `faster-whisper-large-v2`).
-
-### 3. Ollama (Optional)
-For text correction:
+### macOS
 ```bash
-ollama pull glm-4.7-flash
+cd apps/macos
+swift build
+# See apps/macos/README.md for full instructions
 ```
-
-### 4. Rust Toolchain
-Install from [rustup.rs](https://rustup.rs/)
-
-## Installation
-
-1. **Clone repository**
-   ```bash
-   git clone https://github.com/iamniketas/dictator.git
-   cd dictator
-   ```
-
-2. **Configure**
-
-   Edit `config.toml` in `%APPDATA%/dictator/` (auto-created on first run):
-   ```toml
-   [hotkey]
-   modifiers = ["ctrl", "shift"]
-   key = "D"
-
-   [whisper]
-   model_path = "C:\\path\\to\\faster-whisper-large-v2"
-   language = "ru"
-
-   [ollama]
-   url = "http://localhost:11434"
-   model = "glm-4.7-flash"
-   ```
-
-3. **Build**
-   ```bash
-   cargo build --release
-   ```
-
-## Usage
-
-### 1. Start Whisper Server
-```bash
-cd target/release
-start_whisper_server.bat
-```
-
-Wait ~10 seconds for model to load. You'll see:
-```
-INFO:__main__:Model loaded successfully on cuda
-* Running on http://127.0.0.1:5000
-```
-
-### 2. Start Dictator
-```bash
-target\release\dictator.exe
-```
-
-The app will appear in system tray. Press `Ctrl+Shift+D` to:
-- **First press** → Start recording (microphone icon appears)
-- **Second press** → Stop recording, transcribe, and inject text
-
-### 3. Exit
-Right-click tray icon → **Exit**
 
 ## Project Structure
 
 ```
 dictator/
-├── src/
-│   ├── main.rs          # Entry point, pipeline orchestration
-│   ├── audio.rs         # Microphone capture with cpal
-│   ├── transcribe.rs    # HTTP client for Whisper server
-│   ├── llm.rs           # Ollama API client
-│   ├── input.rs         # Global hotkey + text injection
-│   ├── ui.rs            # System tray with Win32 API
-│   └── config.rs        # TOML configuration
-├── whisper_server.py    # Flask HTTP server for faster-whisper
-├── start_whisper_server.bat  # Windows launcher
-└── config.toml          # User configuration (in %APPDATA%)
+  apps/
+    windows/          # Rust + Win32 native client
+    macos/            # Swift + SwiftUI/AppKit native client
+  shared/
+    whisper-server/   # Python HTTP server for faster-whisper
+    contracts/        # Cross-platform schemas and agreements
+  docs/
+    MACOS_ROADMAP.md
+    REPO_STRUCTURE_PLAN.md
+    archive/          # Historical session reports
+  ROADMAP.md          # Feature prioritization and phases
+  ARCHITECTURE.md     # Technical architecture overview
+  CLAUDE.md           # AI assistant instructions
 ```
-
-## Technical Details
-
-### Audio Pipeline
-- **Capture:** cpal with device's native format (e.g., 48kHz stereo)
-- **Conversion:** Stereo → mono (channel averaging), 48kHz → 16kHz (linear interpolation)
-- **Output:** 16kHz mono f32 PCM WAV
-
-### HTTP Communication
-- **reqwest** with `.no_proxy()` (to bypass system proxy for localhost)
-- **multipart/form-data** with WAV file + language parameter
-- **Response:** JSON with transcribed text
-
-### Text Injection
-- Uses Windows `SendInput` API
-- Types characters one-by-one with 1ms delay
-- Supports Unicode via `KEYEVENTF_UNICODE`
-
-## Known Issues
-
-- **System Proxy:** If you have a system proxy enabled, the app automatically disables it for localhost requests to Whisper/Ollama
-- **Console Window:** Release build hides console via `#![windows_subsystem = "windows"]`
-- **VAD Filter:** Whisper's Voice Activity Detection may remove silence — actual transcription duration may differ from recording length
 
 ## Roadmap
 
-- [ ] Overlay UI (show transcribed text near cursor)
-- [ ] Customizable hotkey in UI
-- [ ] macOS/Linux support
-- [ ] Embedded Whisper (replace HTTP server with direct Rust binding)
+See [ROADMAP.md](ROADMAP.md) for detailed feature plan.
 
-## Cross-Platform Expansion (Windows + macOS)
+**Phase 1 (MVP+):** Smart hotkeys, audio waveform overlay, flexible text injection, model selector GUI
+**Phase 2 (Polish):** History, memory management, LLM post-processing toggle
+**Phase 3 (Advanced):** Custom dictionary editor, Command Mode (AI text editing)
 
-The repository is now evolving toward a multi-platform setup with a native macOS client.
+## Related Projects
 
-- macOS implementation roadmap: [`docs/MACOS_ROADMAP.md`](docs/MACOS_ROADMAP.md)
-- Safe repository evolution plan (without breaking Windows): [`docs/REPO_STRUCTURE_PLAN.md`](docs/REPO_STRUCTURE_PLAN.md)
-- Shared contracts: [`shared/contracts/README.md`](shared/contracts/README.md)
-
-Short-term strategy:
-
-1. Keep current Windows Rust app stable in place.
-2. Build native macOS app in parallel (`SwiftUI + AppKit`).
-3. Migrate to final monorepo layout only after CI gates are green for both platforms.
-
-## New Directories (Iteration)
-
-- `apps/macos` — native macOS skeleton app (`SwiftUI + AppKit`).
-- `.github/workflows/windows.yml` — baseline CI for Windows Rust app.
-- `shared/contracts` — cross-platform machine-readable contracts.
+- **Contora** — local audio recording and transcription app (shares whisper runtime and models on the same machine)
 
 ## License
 
-Apache 2.0 — see [LICENSE](LICENSE) file for details
+Apache 2.0 — see [LICENSE](LICENSE) file for details.
 
 ## Credits
 
 - [faster-whisper](https://github.com/SYSTRAN/faster-whisper) — Fast Whisper implementation
+- [WhisperKit](https://github.com/argmaxinc/WhisperKit) — On-device speech recognition for Apple Silicon
 - [cpal](https://github.com/RustAudio/cpal) — Cross-platform audio I/O
 - [windows-rs](https://github.com/microsoft/windows-rs) — Rust bindings for Windows API
+- [Handy](https://github.com/cjpais/Handy) — Open-source voice dictation (architecture reference)

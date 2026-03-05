@@ -2,6 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/iamniketas/dictator/shared/contracts/config.schema.json",
   "title": "Dictator Cross-Platform Config",
+  "description": "Schema v2 — post-migration, multi-platform",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -14,85 +15,83 @@
     "hotkey": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "modifiers",
-        "key"
-      ],
+      "required": ["modifiers", "key"],
       "properties": {
         "modifiers": {
           "type": "array",
           "minItems": 1,
           "items": {
             "type": "string",
-            "enum": [
-              "ctrl",
-              "shift",
-              "alt",
-              "cmd"
-            ]
+            "enum": ["ctrl", "shift", "alt", "cmd"]
           }
         },
         "key": {
           "type": "string",
           "minLength": 1,
           "maxLength": 16
+        },
+        "mode": {
+          "type": "string",
+          "enum": ["toggle", "push_to_talk"],
+          "default": "toggle"
         }
       }
     },
     "audio": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "sample_rate"
-      ],
+      "required": ["sample_rate"],
       "properties": {
         "device": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": ["string", "null"]
         },
         "sample_rate": {
           "type": "integer",
           "minimum": 8000,
-          "maximum": 192000
+          "maximum": 192000,
+          "default": 16000
         }
       }
     },
     "whisper": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "model_path",
-        "language"
-      ],
+      "required": ["language"],
       "properties": {
         "model_path": {
           "type": "string",
           "minLength": 1
         },
+        "server_url": {
+          "type": "string",
+          "format": "uri",
+          "default": "http://127.0.0.1:5000"
+        },
         "language": {
           "type": "string",
           "minLength": 2,
           "maxLength": 8
+        },
+        "engine": {
+          "type": "string",
+          "enum": ["faster-whisper-http", "whisperkit", "whisper-cpp", "parakeet"],
+          "description": "Transcription engine. Platform-dependent defaults."
         }
       }
     },
     "ollama": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "enabled",
-        "url",
-        "model"
-      ],
+      "required": ["enabled", "url", "model"],
       "properties": {
         "enabled": {
-          "type": "boolean"
+          "type": "boolean",
+          "default": false
         },
         "url": {
           "type": "string",
-          "format": "uri"
+          "format": "uri",
+          "default": "http://localhost:11434"
         },
         "model": {
           "type": "string",
@@ -103,18 +102,62 @@
     "streaming": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "enabled",
-        "poll_interval"
-      ],
+      "required": ["enabled"],
       "properties": {
         "enabled": {
-          "type": "boolean"
+          "type": "boolean",
+          "default": true
         },
-        "poll_interval": {
+        "chunk_duration_sec": {
           "type": "integer",
           "minimum": 1,
-          "maximum": 60
+          "maximum": 60,
+          "default": 8
+        }
+      }
+    },
+    "memory": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "idle_unload_minutes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1440,
+          "default": 5,
+          "description": "Minutes of idle before unloading models. 0 = never unload."
+        }
+      }
+    },
+    "injection": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": ["direct", "clipboard", "clipboard_enter"],
+          "default": "direct",
+          "description": "direct = SendInput/CGEvent, clipboard = paste only, clipboard_enter = paste + Enter"
+        },
+        "append_space": {
+          "type": "boolean",
+          "default": true
+        }
+      }
+    },
+    "history": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max_entries": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10000,
+          "default": 50
+        },
+        "store_audio": {
+          "type": "boolean",
+          "default": false
         }
       }
     }
