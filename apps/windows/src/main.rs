@@ -20,6 +20,7 @@ use dictator::streaming::{StreamingEvent, StreamingTranscriber};
 use dictator::transcribe;
 use dictator::ui;
 use dictator::settings_window::{self, InstalledModel, SavedSettings, SettingsParams};
+use dictator::updater;
 use dictator::ui::{DownloadModelItem, ModelMenuItem};
 use dictator::whisper_engine::{self, SharedEngine};
 use dictator::whisper_server::WhisperServerManager;
@@ -257,6 +258,9 @@ fn scan_available_models(config: &Config, current_path: &std::path::Path) -> Vec
 }
 
 fn main() -> Result<()> {
+    // Velopack startup — must be first. May apply a pending update and exit.
+    updater::startup();
+
     // Handle CLI remote-control args before single-instance check.
     // These signal a running instance and exit immediately.
     {
@@ -701,6 +705,21 @@ fn main() -> Result<()> {
                 info!("[MAIN] Hot-switched model to: {:?}", new_path);
             }
         }
+    });
+
+    // ── Auto-updater ──────────────────────────────────────────────────────────
+    // Wire up the install callback (download + apply + restart on user approval)
+    ui::set_install_update_callback(|| {
+        thread::spawn(|| {
+            // Re-check to get the UpdateInfo then download + restart
+            updater::download_and_restart("latest");
+        });
+    });
+
+    // Kick off a background update check (silent, doesn't block startup)
+    updater::check_for_updates_async(|version| {
+        info!("[MAIN] Update available: v{}", version);
+        ui::set_update_available(version);
     });
 
     // Start hotkey listener

@@ -54,6 +54,9 @@ anyhow = "1.0"
 thiserror = "1.0"
 dirs = "5.0"
 
+# Auto-updater via GitHub Releases
+velopack = "0.0.1444-gc245055"
+
 # Clipboard
 clipboard-win = "4.5"
 

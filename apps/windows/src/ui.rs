@@ -36,12 +36,15 @@ const ID_MODEL_END: u16 = 1299;
 const ID_DOWNLOAD_START: u16 = 1300; // Start of download model IDs (1300-1399)
 const ID_DOWNLOAD_END: u16 = 1399;
 const ID_SETTINGS: u16 = 1010;
+const ID_INSTALL_UPDATE: u16 = 1011;
 
 static SHOULD_EXIT: AtomicBool = AtomicBool::new(false);
 static STREAMING_ENABLED: AtomicBool = AtomicBool::new(false);
 static STREAMING_CHUNK_SECONDS: AtomicU64 = AtomicU64::new(15);
 static OLLAMA_ENABLED: AtomicBool = AtomicBool::new(false);
 static IS_DOWNLOADING: AtomicBool = AtomicBool::new(false);
+static UPDATE_AVAILABLE_VERSION: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+static INSTALL_UPDATE_CALLBACK: std::sync::Mutex<Option<Box<dyn Fn() + Send + 'static>>> = std::sync::Mutex::new(None);
 
 // History callbacks
 static HISTORY_OPEN_CALLBACK: std::sync::Mutex<Option<Box<dyn Fn() + Send + 'static>>> = std::sync::Mutex::new(None);
@@ -175,6 +178,23 @@ where
     F: Fn() -> Vec<DownloadModelItem> + Send + 'static,
 {
     if let Ok(mut cb) = DOWNLOAD_LIST_CALLBACK.lock() {
+        *cb = Some(Box::new(callback));
+    }
+}
+
+/// Notify that an update is available (shown in tray menu).
+pub fn set_update_available(version: String) {
+    if let Ok(mut v) = UPDATE_AVAILABLE_VERSION.lock() {
+        *v = Some(version);
+    }
+}
+
+/// Set the callback invoked when user clicks the update item in the tray.
+pub fn set_install_update_callback<F>(callback: F)
+where
+    F: Fn() + Send + 'static,
+{
+    if let Ok(mut cb) = INSTALL_UPDATE_CALLBACK.lock() {
         *cb = Some(Box::new(callback));
     }
 }
@@ -406,6 +426,13 @@ unsafe extern "system" fn window_proc(
                             callback();
                         }
                     }
+                } else if cmd == ID_INSTALL_UPDATE {
+                    eprintln!("[TRAY] Install update clicked");
+                    if let Ok(cb) = INSTALL_UPDATE_CALLBACK.lock() {
+                        if let Some(ref callback) = *cb {
+                            callback();
+                        }
+                    }
                 } else if cmd == ID_SETTINGS {
                     eprintln!("[TRAY] Opening settings");
                     if let Ok(cb) = SETTINGS_CALLBACK.lock() {
@@ -447,6 +474,20 @@ unsafe fn show_context_menu(hwnd: HWND) {
         let Ok(menu) = CreatePopupMenu() else {
             return;
         };
+
+        // ── Update notification (shown when a new version is available) ──────
+        if let Ok(guard) = UPDATE_AVAILABLE_VERSION.lock() {
+            if let Some(ref version) = *guard {
+                let label = format!("\u{2191} Update available (v{}) \u{2014} Install", version);
+                let wide: Vec<u16> = label.encode_utf16().chain(std::iter::once(0)).collect();
+                let _ = AppendMenuW(
+                    menu, MF_STRING,
+                    ID_INSTALL_UPDATE as usize,
+                    windows::core::PCWSTR(wide.as_ptr()),
+                );
+                let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
+            }
+        }
 
         // ── Model selector (quick switch) ────────────────────────────────────
         let models = if let Ok(cb) = MODEL_GET_LIST_CALLBACK.lock() {
