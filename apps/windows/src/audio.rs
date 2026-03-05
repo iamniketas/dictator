@@ -3,7 +3,7 @@
 use anyhow::Result;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::SampleFormat;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -23,6 +23,8 @@ pub struct AudioRecorder {
     data_rx: Mutex<Receiver<Vec<f32>>>,
     buffer_rx: Mutex<Receiver<(Vec<f32>, usize)>>,
     is_recording: Arc<AtomicBool>,
+    /// Current RMS amplitude, stored as f32 bits for lock-free access
+    amplitude: Arc<AtomicU32>,
     _thread_handle: JoinHandle<()>,
     sample_rate: u32,
 }
@@ -35,9 +37,11 @@ impl AudioRecorder {
         let (buffer_tx, buffer_rx) = mpsc::channel();
         let is_recording = Arc::new(AtomicBool::new(false));
         let is_recording_clone = is_recording.clone();
+        let amplitude = Arc::new(AtomicU32::new(0));
+        let amplitude_thread = amplitude.clone();
 
         let thread_handle = thread::spawn(move || {
-            audio_thread(cmd_rx, data_tx, buffer_tx, is_recording_clone);
+            audio_thread(cmd_rx, data_tx, buffer_tx, is_recording_clone, amplitude_thread);
         });
 
         Ok(Self {
@@ -45,6 +49,7 @@ impl AudioRecorder {
             data_rx: Mutex::new(data_rx),
             buffer_rx: Mutex::new(buffer_rx),
             is_recording,
+            amplitude,
             _thread_handle: thread_handle,
             sample_rate: 16000,
         })
@@ -89,6 +94,11 @@ impl AudioRecorder {
         self.is_recording.load(Ordering::SeqCst)
     }
 
+    /// Get current RMS amplitude (0.0 – ~0.3 for normal speech)
+    pub fn get_amplitude(&self) -> f32 {
+        f32::from_bits(self.amplitude.load(Ordering::Relaxed))
+    }
+
     /// Get sample rate
     pub fn sample_rate(&self) -> u32 {
         self.sample_rate
@@ -107,6 +117,7 @@ fn audio_thread(
     data_tx: Sender<Vec<f32>>,
     buffer_tx: Sender<(Vec<f32>, usize)>,
     is_recording: Arc<AtomicBool>,
+    amplitude: Arc<AtomicU32>,
 ) {
     let buffer = Arc::new(Mutex::new(Vec::<f32>::new()));
     let device_config = Arc::new(Mutex::new((48000u32, 1u16))); // (sample_rate, channels)
@@ -150,6 +161,7 @@ fn audio_thread(
                 // Clone for callback
                 let buffer_clone = buffer.clone();
                 let is_rec = is_recording.clone();
+                let amplitude_clone = amplitude.clone();
 
                 // Build stream
                 let stream = match sample_format {
@@ -157,6 +169,10 @@ fn audio_thread(
                         &stream_config,
                         move |data: &[f32], _: &cpal::InputCallbackInfo| {
                             if is_rec.load(Ordering::SeqCst) {
+                                if !data.is_empty() {
+                                    let rms = (data.iter().map(|s| s * s).sum::<f32>() / data.len() as f32).sqrt();
+                                    amplitude_clone.store(rms.to_bits(), Ordering::Relaxed);
+                                }
                                 buffer_clone.lock().unwrap().extend_from_slice(data);
                             }
                         },
@@ -169,6 +185,10 @@ fn audio_thread(
                             if is_rec.load(Ordering::SeqCst) {
                                 let samples: Vec<f32> =
                                     data.iter().map(|&s| s as f32 / 32768.0).collect();
+                                if !samples.is_empty() {
+                                    let rms = (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt();
+                                    amplitude_clone.store(rms.to_bits(), Ordering::Relaxed);
+                                }
                                 buffer_clone.lock().unwrap().extend(samples);
                             }
                         },
@@ -183,6 +203,10 @@ fn audio_thread(
                                     .iter()
                                     .map(|&s| (s as f32 - 32768.0) / 32768.0)
                                     .collect();
+                                if !samples.is_empty() {
+                                    let rms = (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt();
+                                    amplitude_clone.store(rms.to_bits(), Ordering::Relaxed);
+                                }
                                 buffer_clone.lock().unwrap().extend(samples);
                             }
                         },
@@ -216,6 +240,7 @@ fn audio_thread(
                     match cmd_rx.recv() {
                         Ok(AudioCommand::Stop) => {
                             is_recording.store(false, Ordering::SeqCst);
+                            amplitude.store(0f32.to_bits(), Ordering::Relaxed);
                             drop(stream);
 
                             let raw_data = buffer.lock().unwrap().clone();

@@ -46,6 +46,8 @@ struct OverlayState {
     position: (i32, i32),
     is_recording: bool,
     recording_frame: u32,
+    /// Rolling amplitude history for waveform display (newest at back)
+    waveform_bars: Vec<f32>,
 }
 
 pub struct OverlayWindow {
@@ -64,6 +66,7 @@ enum OverlayCommand {
     UpdateStatusText(String),
     UpdateBodyText(String),
     AnimationTick,
+    WaveformUpdate(f32),
     SetPosition(i32, i32),
     Shutdown,
 }
@@ -145,7 +148,7 @@ impl OverlayApp {
     }
 
     fn render(&mut self) {
-        let (status_text, body_text, visible, config, is_recording, recording_frame) = {
+        let (status_text, body_text, visible, config, is_recording, waveform_bars) = {
             let state = self.state.lock().unwrap();
             (
                 state.status_text.clone(),
@@ -153,7 +156,7 @@ impl OverlayApp {
                 state.visible,
                 state.config.clone(),
                 state.is_recording,
-                state.recording_frame,
+                state.waveform_bars.clone(),
             )
         };
 
@@ -206,38 +209,37 @@ impl OverlayApp {
                 SetBkMode(mem_dc, TRANSPARENT);
 
                 if is_recording {
-                    let radius = if recording_frame % 2 == 0 { 8 } else { 12 };
-                    let center_x = 30;
+                    // Draw waveform bars (20 bars, 2px wide, 1px gap)
+                    const BAR_WIDTH: i32 = 2;
+                    const BAR_GAP: i32 = 1;
+                    const BAR_STEP: i32 = BAR_WIDTH + BAR_GAP;
+                    const X_START: i32 = 8;
+
                     let center_y = config.height as i32 / 2;
+                    let max_half = (center_y - 8).max(4);
 
-                    let red_brush = CreateSolidBrush(COLORREF(0x0000FF));
-                    let old_red_brush = SelectObject(mem_dc, red_brush);
-                    let _ = Ellipse(
-                        mem_dc,
-                        center_x - radius,
-                        center_y - radius,
-                        center_x + radius,
-                        center_y + radius,
-                    );
-                    SelectObject(mem_dc, old_red_brush);
-                    let _ = DeleteObject(red_brush);
+                    let bar_brush = CreateSolidBrush(COLORREF(0x0000FF)); // red
+                    let null_pen = GetStockObject(NULL_PEN);
+                    let old_bar_brush = SelectObject(mem_dc, bar_brush);
+                    let old_bar_pen = SelectObject(mem_dc, null_pen);
 
-                    if let Some(rec_font) = self.rec_font {
-                        SelectObject(mem_dc, rec_font);
+                    for (i, &amp) in waveform_bars.iter().enumerate() {
+                        let x = X_START + i as i32 * BAR_STEP;
+                        let scaled = (amp * 6.0).min(1.0_f32);
+                        let bar_half = ((scaled * max_half as f32) as i32).max(2);
+                        let _ = Rectangle(
+                            mem_dc,
+                            x,
+                            center_y - bar_half,
+                            x + BAR_WIDTH,
+                            center_y + bar_half,
+                        );
                     }
-                    let mut rec_text: Vec<u16> = "REC".encode_utf16().collect();
-                    let mut rec_rect = RECT {
-                        left: 48,
-                        top: 0,
-                        right: config.width as i32,
-                        bottom: config.height as i32,
-                    };
-                    DrawTextW(
-                        mem_dc,
-                        &mut rec_text,
-                        &mut rec_rect,
-                        DT_LEFT | DT_VCENTER | DT_SINGLELINE,
-                    );
+
+                    SelectObject(mem_dc, old_bar_pen);
+                    SelectObject(mem_dc, old_bar_brush);
+                    let _ = DeleteObject(bar_brush);
+
                     if let Some(main_font) = self.font {
                         SelectObject(mem_dc, main_font);
                     }
@@ -245,7 +247,7 @@ impl OverlayApp {
                     SelectObject(mem_dc, main_font);
                 }
 
-                let left_margin = if is_recording { 85 } else { 20 };
+                let left_margin = if is_recording { 75 } else { 20 };
 
                 if !status_text.is_empty() {
                     if let Some(rec_font) = self.rec_font {
@@ -540,6 +542,10 @@ impl ApplicationHandler<OverlayCommand> for OverlayApp {
                     state.visible = true;
                     state.status_text.clear();
                     state.body_text.clear();
+                    // Pre-fill with silence so bars appear immediately
+                    state.waveform_bars = vec![0.0f32; 20];
+                } else {
+                    state.waveform_bars.clear();
                 }
                 drop(state);
 
@@ -607,6 +613,19 @@ impl ApplicationHandler<OverlayCommand> for OverlayApp {
                     window.request_redraw();
                 }
             }
+            OverlayCommand::WaveformUpdate(amplitude) => {
+                let mut state = self.state.lock().unwrap();
+                if state.is_recording {
+                    state.waveform_bars.push(amplitude);
+                    if state.waveform_bars.len() > 20 {
+                        state.waveform_bars.remove(0);
+                    }
+                }
+                drop(state);
+                if let Some(window) = self.window.as_ref() {
+                    window.request_redraw();
+                }
+            }
             OverlayCommand::Shutdown => {
                 event_loop.exit();
             }
@@ -624,6 +643,7 @@ impl OverlayWindow {
             position: (100, 100),
             is_recording: false,
             recording_frame: 0,
+            waveform_bars: Vec::new(),
         }));
 
         let state_clone = state.clone();
@@ -790,6 +810,13 @@ impl OverlayWindow {
     pub fn update_body_text(&self, text: &str) {
         if let Some(proxy) = self.event_loop_proxy.as_ref() {
             let _ = proxy.send_event(OverlayCommand::UpdateBodyText(text.to_string()));
+        }
+    }
+
+    /// Push a new amplitude sample to the waveform (call ~10fps while recording)
+    pub fn update_waveform(&self, amplitude: f32) {
+        if let Some(proxy) = self.event_loop_proxy.as_ref() {
+            let _ = proxy.send_event(OverlayCommand::WaveformUpdate(amplitude));
         }
     }
 }

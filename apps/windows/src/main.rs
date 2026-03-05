@@ -2,8 +2,10 @@
 //! Dictator - Voice dictation service for Windows
 
 use anyhow::Result;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
+use std::thread;
 use std::time::{Duration, Instant};
 use tracing::{error, info, warn};
 
@@ -16,6 +18,7 @@ use dictator::overlay_win32::{OverlayConfig, OverlayWindow};
 use dictator::streaming::{StreamingEvent, StreamingTranscriber};
 use dictator::transcribe;
 use dictator::ui;
+use dictator::ui::ModelMenuItem;
 use dictator::whisper_server::WhisperServerManager;
 
 fn estimate_recording_size_mb(elapsed: Duration) -> f32 {
@@ -58,6 +61,42 @@ fn format_transcribing_status(
         elapsed_secs,
         eta
     )
+}
+
+fn scan_available_models(config: &Config) -> Vec<ModelMenuItem> {
+    let Some(models_dir) = config.whisper.effective_models_dir() else {
+        return Vec::new();
+    };
+
+    let Ok(entries) = std::fs::read_dir(&models_dir) else {
+        return Vec::new();
+    };
+
+    let current_name = config
+        .whisper
+        .model_path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+
+    let mut models: Vec<ModelMenuItem> = entries
+        .flatten()
+        .filter(|e| e.path().is_dir())
+        .enumerate()
+        .map(|(i, e)| {
+            let name = e.file_name().to_string_lossy().to_string();
+            let is_current = name == current_name;
+            ModelMenuItem { index: i, name, is_current }
+        })
+        .collect();
+
+    models.sort_by(|a, b| a.name.cmp(&b.name));
+    // Re-assign indices after sort
+    for (i, m) in models.iter_mut().enumerate() {
+        m.index = i;
+    }
+
+    models
 }
 
 fn main() -> Result<()> {
@@ -160,6 +199,30 @@ fn main() -> Result<()> {
         }
     });
 
+    // Set up model selector callbacks
+    let config_for_models = config.clone();
+    ui::set_model_list_callback(move || {
+        scan_available_models(&config_for_models)
+    });
+
+    let config_for_select = config.clone();
+    ui::set_model_select_callback(move |index| {
+        let models = scan_available_models(&config_for_select);
+        if let Some(model) = models.get(index) {
+            let mut updated = config_for_select.clone();
+            updated.whisper.model_path = config_for_select
+                .whisper
+                .effective_models_dir()
+                .unwrap_or_default()
+                .join(&model.name);
+            if let Err(e) = updated.save() {
+                error!("[MAIN] Failed to save config after model switch: {}", e);
+            } else {
+                info!("[MAIN] Switched model to: {}", model.name);
+            }
+        }
+    });
+
     // Start hotkey listener
     let (tx, rx) = mpsc::channel();
     let _hotkey_handle = input::start_hotkey_listener(tx);
@@ -183,6 +246,8 @@ fn main() -> Result<()> {
         let mut accumulated_text = String::new();
         let mut recording_started_at: Option<Instant> = None;
         let mut last_recording_second: u64 = u64::MAX;
+        let mut waveform_thread: Option<thread::JoinHandle<()>> = None;
+        let waveform_stop = Arc::new(AtomicBool::new(false));
         let mut avg_transcribe_ratio: f32 = 0.20;
         let mut whisper_ready = false;
         let mut whisper_status_text = String::from("Whisper: idle");
@@ -330,6 +395,19 @@ fn main() -> Result<()> {
                             &whisper_status_text,
                         ));
 
+                        // Start waveform animation thread (30fps)
+                        waveform_stop.store(false, Ordering::SeqCst);
+                        let wf_stop = waveform_stop.clone();
+                        let wf_recorder = recorder_clone.clone();
+                        let wf_overlay = overlay_clone.clone();
+                        waveform_thread = Some(thread::spawn(move || {
+                            while !wf_stop.load(Ordering::SeqCst) {
+                                let amp = wf_recorder.get_amplitude();
+                                wf_overlay.update_waveform(amp);
+                                thread::sleep(Duration::from_millis(33));
+                            }
+                        }));
+
                         // Start streaming if enabled (from tray menu)
                         if ui::is_streaming_enabled() {
                             info!("[MAIN] Starting streaming transcription...");
@@ -359,6 +437,13 @@ fn main() -> Result<()> {
                     last_recording_second = u64::MAX;
                     whisper_ready = false;
                     whisper_status_text = "Whisper: idle".to_string();
+
+                    // Stop waveform thread
+                    waveform_stop.store(true, Ordering::SeqCst);
+                    if let Some(handle) = waveform_thread.take() {
+                        let _ = handle.join();
+                    }
+
                     overlay_clone.set_recording(false);
 
                     // CRITICAL: Stop streaming FIRST while recording is still active
@@ -554,7 +639,7 @@ fn main() -> Result<()> {
                     overlay_clone.show(&final_text);
 
                     // Inject text into focused application
-                    if let Err(e) = input::inject_text(&final_text) {
+                    if let Err(e) = input::inject_text(&final_text, &config_clone.injection.method) {
                         error!("Failed to inject text: {}", e);
                     }
 

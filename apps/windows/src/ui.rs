@@ -27,6 +27,8 @@ const ID_CHUNK_15: u16 = 1005;
 const ID_OPEN_HISTORY: u16 = 1006;
 const ID_HISTORY_START: u16 = 1100; // Start of dynamic history IDs (1100-1199)
 const ID_HISTORY_END: u16 = 1199;
+const ID_MODEL_START: u16 = 1200; // Start of dynamic model IDs (1200-1299)
+const ID_MODEL_END: u16 = 1299;
 
 static SHOULD_EXIT: AtomicBool = AtomicBool::new(false);
 static STREAMING_ENABLED: AtomicBool = AtomicBool::new(false);
@@ -37,11 +39,23 @@ static HISTORY_OPEN_CALLBACK: std::sync::Mutex<Option<Box<dyn Fn() + Send + 'sta
 static HISTORY_COPY_CALLBACK: std::sync::Mutex<Option<Box<dyn Fn(usize) + Send + 'static>>> = std::sync::Mutex::new(None);
 static HISTORY_GET_ENTRIES_CALLBACK: std::sync::Mutex<Option<Box<dyn Fn() -> Vec<HistoryMenuEntry> + Send + 'static>>> = std::sync::Mutex::new(None);
 
+// Model selector callbacks
+static MODEL_SELECT_CALLBACK: std::sync::Mutex<Option<Box<dyn Fn(usize) + Send + 'static>>> = std::sync::Mutex::new(None);
+static MODEL_GET_LIST_CALLBACK: std::sync::Mutex<Option<Box<dyn Fn() -> Vec<ModelMenuItem> + Send + 'static>>> = std::sync::Mutex::new(None);
+
 /// Entry for history menu
 #[derive(Debug, Clone)]
 pub struct HistoryMenuEntry {
     pub id: usize,  // 0-based index
     pub label: String,
+}
+
+/// Entry for model selector menu
+#[derive(Debug, Clone)]
+pub struct ModelMenuItem {
+    pub index: usize,
+    pub name: String,
+    pub is_current: bool,
 }
 
 /// Set the callback for opening history folder
@@ -70,6 +84,26 @@ where
     F: Fn() -> Vec<HistoryMenuEntry> + Send + 'static,
 {
     if let Ok(mut cb) = HISTORY_GET_ENTRIES_CALLBACK.lock() {
+        *cb = Some(Box::new(callback));
+    }
+}
+
+/// Set the callback invoked when user selects a model (receives 0-based index)
+pub fn set_model_select_callback<F>(callback: F)
+where
+    F: Fn(usize) + Send + 'static,
+{
+    if let Ok(mut cb) = MODEL_SELECT_CALLBACK.lock() {
+        *cb = Some(Box::new(callback));
+    }
+}
+
+/// Set the callback that returns the list of available models
+pub fn set_model_list_callback<F>(callback: F)
+where
+    F: Fn() -> Vec<ModelMenuItem> + Send + 'static,
+{
+    if let Ok(mut cb) = MODEL_GET_LIST_CALLBACK.lock() {
         *cb = Some(Box::new(callback));
     }
 }
@@ -262,6 +296,14 @@ unsafe extern "system" fn window_proc(
                             callback(index);
                         }
                     }
+                } else if cmd >= ID_MODEL_START && cmd <= ID_MODEL_END {
+                    let index = (cmd - ID_MODEL_START) as usize;
+                    eprintln!("[TRAY] Selecting model {}", index);
+                    if let Ok(cb) = MODEL_SELECT_CALLBACK.lock() {
+                        if let Some(ref callback) = *cb {
+                            callback(index);
+                        }
+                    }
                 }
                 LRESULT(0)
             }
@@ -314,6 +356,34 @@ unsafe fn show_context_menu(hwnd: HWND) {
                 ID_CHUNK_15 as usize,
                 w!("Chunk: 15s"),
             );
+
+            // Add Model selector
+            let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
+            let models = if let Ok(cb) = MODEL_GET_LIST_CALLBACK.lock() {
+                if let Some(ref callback) = *cb {
+                    callback()
+                } else {
+                    Vec::new()
+                }
+            } else {
+                Vec::new()
+            };
+
+            if models.is_empty() {
+                let _ = AppendMenuW(menu, MF_GRAYED | MF_STRING, 0, w!("Model: (not configured)"));
+            } else {
+                for model in &models {
+                    let flag = if model.is_current { MF_CHECKED } else { MF_UNCHECKED };
+                    let menu_id = ID_MODEL_START + model.index as u16;
+                    let wide: Vec<u16> = model.name.encode_utf16().chain(std::iter::once(0)).collect();
+                    let _ = AppendMenuW(
+                        menu,
+                        flag | MF_STRING,
+                        menu_id as usize,
+                        windows::core::PCWSTR(wide.as_ptr()),
+                    );
+                }
+            }
 
             // Add Recent Recordings submenu
             let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);

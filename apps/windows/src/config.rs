@@ -16,6 +16,8 @@ pub struct Config {
     pub streaming: StreamingConfig,
     #[serde(default)]
     pub history: HistoryConfig,
+    #[serde(default)]
+    pub injection: InjectionConfig,
 }
 
 /// History storage configuration
@@ -78,6 +80,53 @@ pub struct AudioConfig {
 pub struct WhisperConfig {
     pub model_path: PathBuf,
     pub language: String,
+    /// Directory to scan for available models.
+    /// If not set, defaults to the parent of model_path.
+    #[serde(default)]
+    pub models_dir: Option<PathBuf>,
+}
+
+impl WhisperConfig {
+    /// Returns the directory to scan for models.
+    pub fn effective_models_dir(&self) -> Option<PathBuf> {
+        if let Some(ref dir) = self.models_dir {
+            return Some(dir.clone());
+        }
+        self.model_path.parent().map(|p| p.to_path_buf())
+    }
+}
+
+/// Text injection method
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InjectionMethod {
+    /// Unicode SendInput (auto-switches to clipboard for >500 chars)
+    Direct,
+    /// Always use clipboard + Ctrl+V (preserves original clipboard)
+    Clipboard,
+    /// Clipboard + Ctrl+V + Enter
+    ClipboardEnter,
+}
+
+impl Default for InjectionMethod {
+    fn default() -> Self {
+        InjectionMethod::Direct
+    }
+}
+
+/// Text injection configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InjectionConfig {
+    #[serde(default)]
+    pub method: InjectionMethod,
+}
+
+impl Default for InjectionConfig {
+    fn default() -> Self {
+        Self {
+            method: InjectionMethod::Direct,
+        }
+    }
 }
 
 /// Ollama configuration
@@ -103,6 +152,7 @@ impl Default for Config {
             whisper: WhisperConfig {
                 model_path: PathBuf::from("models/ggml-large-v3.bin"),
                 language: "ru".into(),
+                models_dir: None,
             },
             ollama: OllamaConfig {
                 enabled: false, // Disabled by default for speed
@@ -114,6 +164,7 @@ impl Default for Config {
                 poll_interval: default_streaming_poll_interval(),
             },
             history: HistoryConfig::default(),
+            injection: InjectionConfig::default(),
         }
     }
 }

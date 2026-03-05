@@ -171,19 +171,24 @@ fn find_server_script() -> Result<PathBuf> {
     let exe = std::env::current_exe().ok();
     let exe_dir = exe.as_deref().and_then(Path::parent).map(PathBuf::from);
 
-    let mut candidates = vec![cwd.join("whisper_server.py")];
-    if let Some(dir) = exe_dir {
-        candidates.push(dir.join("whisper_server.py"));
-        if let Some(parent) = dir.parent() {
-            candidates.push(parent.join("whisper_server.py"));
-            if let Some(grand) = parent.parent() {
-                candidates.push(grand.join("whisper_server.py"));
+    let mut candidates: Vec<PathBuf> = Vec::new();
+
+    // Walk up from exe dir and cwd, checking both old location and new shared/ location
+    for start in [exe_dir.as_deref(), Some(cwd.as_path())].into_iter().flatten() {
+        let mut dir = start.to_path_buf();
+        for _ in 0..6 {
+            candidates.push(dir.join("whisper_server.py"));
+            candidates.push(dir.join("shared").join("whisper-server").join("whisper_server.py"));
+            match dir.parent().map(PathBuf::from) {
+                Some(p) if p != dir => dir = p,
+                _ => break,
             }
         }
     }
 
     for path in candidates {
         if path.exists() {
+            info!("[WHISPER] Found server script at: {}", path.display());
             return Ok(path);
         }
     }
