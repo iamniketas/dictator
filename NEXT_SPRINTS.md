@@ -7,7 +7,7 @@
 ## Current State
 
 - **Windows (Rust):** v0.3.0 in `apps/windows/`, build: `cd apps/windows && cargo build`
-- **macOS (Swift):** Prototype in `apps/macos/`, single-file `main.swift` (~60KB)
+- **macOS (Swift):** Prototype in `apps/macos/`, single-file `DictatorMacApp.swift` (~60KB)
 - **Shared:** Whisper server in `shared/whisper-server/`, contracts in `shared/contracts/`
 - **CI:** GitHub Actions — Windows CI on push, Release workflow on `v*` tags
 
@@ -44,7 +44,7 @@
 
 **Goal:** Get macOS client to feature parity with Windows basic pipeline.
 
-### B1: Modularize main.swift
+### B1: Modularize DictatorMacApp.swift ✅ DONE (2026-03-06)
 - Split 60KB single file into proper Swift modules:
   - `AudioCaptureService.swift`
   - `TranscriptionService.swift`
@@ -54,19 +54,39 @@
   - `SettingsStore.swift`
   - `AppState.swift`
 
-### B2: WhisperKit Integration
+### B2: WhisperKit Integration ✅ DONE (2026-03-06)
 - Replace HTTP server dependency with WhisperKit (CoreML/Metal/ANE)
 - Evaluate performance on M1/M2/M3
 - Keep HTTP fallback for older Macs without ANE
 
-### B3: Text Injection Reliability
+### B3: Text Injection Reliability ✅ DONE (2026-03-06)
 - Pasteboard + CGEvent (Cmd+V) as primary method
 - Accessibility permission flow with onboarding guide
 - Fallback: clipboard-only mode
 
-### B4: Streaming Transcription
+### B4: Streaming Transcription ✅ DONE (2026-03-06)
 - Chunk-based pipeline matching Windows behavior
 - Overlay/status panel for partial results
+
+### B5: Hardening + Archive Controls ✅ DONE (2026-03-06)
+- Fixed tray UX and toggle consistency:
+  - `Live Transcription` now switches reliably from first click
+  - `Settings...` moved near `Quit` for cleaner menu hierarchy
+- Overlay polish for Apple-style minimalism:
+  - reduced floating window width
+  - waveform centered vertically with symmetric top/bottom max-amplitude padding
+- Streaming reliability fixes:
+  - chunk retry policy (up to 3 retries)
+  - no forced loss-prone chunk cancellation during finalization
+  - if streaming is incomplete/fails, force full-pass fallback to avoid silent partial transcripts
+- Recording archive management (cross-platform learning for Windows):
+  - persisted archive folder stats in Settings (path, recording count, total size)
+  - open folder action
+  - retention policy options:
+    - Keep Everything
+    - Keep Last 5 Recordings
+    - Keep Last 3 Days
+    - Keep Last 5 Days
 
 ---
 
@@ -228,7 +248,7 @@
 ## Up Next
 
 ### Sprint N: macOS — MVP Foundation (Sprint B)
-- Modularize `main.swift`, integrate WhisperKit
+- B1+B2+B3+B4 complete
 - macOS development done on macOS machine directly
 
 ### Sprint O: Custom Dictionary Editor

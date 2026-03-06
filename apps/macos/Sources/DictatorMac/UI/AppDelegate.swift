@@ -46,6 +46,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         item.button?.imageScaling = .scaleNone
 
         let menu = NSMenu()
+        menu.autoenablesItems = false
 
         let summary = NSMenuItem(title: "Status: Ready", action: nil, keyEquivalent: "")
         summary.isEnabled = false
@@ -54,17 +55,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let hotkeySummary = NSMenuItem(title: "Shortcut: Cmd+Shift+D / Ctrl+Shift+D", action: nil, keyEquivalent: "")
         hotkeySummary.isEnabled = false
         menu.addItem(hotkeySummary)
-        let settingsItem = NSMenuItem(title: "Settings...", action: #selector(openSettings), keyEquivalent: ",")
-        settingsItem.target = self
-        menu.addItem(settingsItem)
-
         menu.addItem(.separator())
 
         let record = NSMenuItem(title: "Start Recording", action: #selector(toggleRecording), keyEquivalent: "")
         record.target = self
         menu.addItem(record)
 
-        let streaming = NSMenuItem(title: "Live Transcription", action: #selector(toggleStreaming), keyEquivalent: "")
+        let streaming = NSMenuItem(title: "Live Transcription", action: #selector(toggleStreaming(_:)), keyEquivalent: "")
         streaming.target = self
         menu.addItem(streaming)
 
@@ -87,6 +84,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(launchAtLogin)
 
         menu.addItem(.separator())
+
+        let settingsItem = NSMenuItem(title: "Settings...", action: #selector(openSettings), keyEquivalent: ",")
+        settingsItem.target = self
+        menu.addItem(settingsItem)
 
         let quitItem = NSMenuItem(title: "Quit", action: #selector(quitApp), keyEquivalent: "q")
         quitItem.target = self
@@ -239,7 +240,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.isOpaque = false
         window.backgroundColor = .clear
         window.hasShadow = true
-        window.setContentSize(NSSize(width: 280, height: 40))
+        window.setContentSize(NSSize(width: 170, height: 40))
     }
 
     private func updateTickerWindowVisibility() {
@@ -296,8 +297,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         model.toggleRecording(sourceAppPID: nil)
     }
 
-    @objc private func toggleStreaming() {
-        model.streamingEnabled.toggle()
+    @objc private func toggleStreaming(_ sender: NSMenuItem) {
+        let nextValue = sender.state != .on
+        model.streamingEnabled = nextValue
+        sender.state = nextValue ? .on : .off
+        refreshMenuState()
     }
 
     @objc private func toggleLaunchAtLogin() {

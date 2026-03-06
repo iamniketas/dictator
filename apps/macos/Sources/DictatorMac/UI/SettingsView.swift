@@ -40,6 +40,43 @@ struct SettingsView: View {
                     .padding(.top, 4)
                 }
 
+                GroupBox("Recordings Archive") {
+                    VStack(alignment: .leading, spacing: 10) {
+                        LabeledContent("Folder") {
+                            Text(model.recordingsDirectoryPath)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(2)
+                                .multilineTextAlignment(.trailing)
+                        }
+
+                        LabeledContent("Saved recordings") {
+                            Text("\(model.recordingsCount)")
+                                .foregroundStyle(.secondary)
+                        }
+
+                        LabeledContent("Archive size") {
+                            Text(formattedBytes(model.recordingsTotalBytes))
+                                .foregroundStyle(.secondary)
+                        }
+
+                        Picker("Auto cleanup", selection: $model.recordingRetentionPolicy) {
+                            ForEach(RecordingRetentionPolicy.allCases) { policy in
+                                Text(policy.title).tag(policy)
+                            }
+                        }
+
+                        HStack {
+                            Button("Open Folder") {
+                                model.openRecordingsFolder()
+                            }
+                            Button("Refresh") {
+                                model.refreshArchiveStats()
+                            }
+                        }
+                    }
+                    .padding(.top, 4)
+                }
+
                 GroupBox("Text Injection") {
                     VStack(alignment: .leading, spacing: 10) {
                         Picker("Mode", selection: $model.textInjectionMode) {
@@ -101,6 +138,7 @@ struct SettingsView: View {
         .frame(width: 560, height: 620)
         .onAppear {
             model.permissions.refresh()
+            model.refreshArchiveStats()
         }
     }
 
@@ -116,5 +154,9 @@ struct SettingsView: View {
             return
         }
         NSWorkspace.shared.open(url)
+    }
+
+    private func formattedBytes(_ bytes: Int64) -> String {
+        ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
     }
 }

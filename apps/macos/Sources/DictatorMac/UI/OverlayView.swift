@@ -7,7 +7,7 @@ struct DashboardView: View {
         content
             .padding(.horizontal, 8)
             .padding(.vertical, 6)
-            .frame(width: 280, height: 40)
+            .frame(width: 170, height: 40)
             .background(
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .fill(.ultraThinMaterial)
@@ -33,27 +33,15 @@ struct DashboardView: View {
     private var content: some View {
         if model.isRecording {
             WaveformView(bars: model.waveformBars)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
         } else if model.isFinalizingStop || model.isTranscribing || model.isStreamingChunkTranscribing {
             HStack(spacing: 8) {
                 ProgressView()
                     .scaleEffect(0.78)
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Processing")
-                        .font(.system(size: 13, weight: .semibold, design: .rounded))
-                    if model.estimatedProcessingTotalSeconds >= 10, model.estimatedProcessingRemainingSeconds > 0 {
-                        Text("About \(formatSeconds(model.estimatedProcessingRemainingSeconds)) remaining")
-                            .font(.system(size: 12, weight: .regular, design: .rounded))
-                            .foregroundStyle(.secondary)
-                    } else {
-                        Text("Please wait...")
-                            .font(.system(size: 12, weight: .regular, design: .rounded))
-                            .foregroundStyle(.secondary)
-                    }
-                }
+                Text("Processing...")
+                    .font(.system(size: 13, weight: .semibold, design: .rounded))
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .center)
         } else {
             HStack(spacing: 8) {
                 Image(systemName: "checkmark.circle.fill")
@@ -72,10 +60,6 @@ struct DashboardView: View {
         return .blue
     }
 
-    private func formatSeconds(_ value: Double) -> String {
-        let rounded = Int(max(0, value))
-        return "\(rounded)s"
-    }
 }
 
 private struct WaveformView: View {
@@ -91,15 +75,19 @@ private struct WaveformView: View {
                 ForEach(Array(bars.enumerated()), id: \.offset) { _, value in
                     Capsule(style: .continuous)
                         .fill(Color.red.opacity(0.86))
-                        .frame(width: barWidth, height: barHeight(value))
+                        .frame(width: barWidth, height: barHeight(value, availableHeight: geometry.size.height))
                 }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
     }
 
-    private func barHeight(_ normalized: Double) -> CGFloat {
+    private func barHeight(_ normalized: Double, availableHeight: CGFloat) -> CGFloat {
         let clamped = min(max(normalized, 0), 1)
-        return CGFloat(4 + (clamped * 30))
+        let verticalPadding: CGFloat = 2
+        let minHeight: CGFloat = 2
+        let maxHeight = max(minHeight, availableHeight - (verticalPadding * 2))
+        return minHeight + (maxHeight - minHeight) * clamped
     }
 }

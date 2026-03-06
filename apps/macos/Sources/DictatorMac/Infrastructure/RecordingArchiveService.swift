@@ -11,6 +11,28 @@ enum RecordingArchiveError: LocalizedError {
     }
 }
 
+enum RecordingRetentionPolicy: String, CaseIterable, Identifiable {
+    case keepAll
+    case keepLast5
+    case keepLast3Days
+    case keepLast5Days
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .keepAll:
+            return "Keep Everything"
+        case .keepLast5:
+            return "Keep Last 5 Recordings"
+        case .keepLast3Days:
+            return "Keep Last 3 Days"
+        case .keepLast5Days:
+            return "Keep Last 5 Days"
+        }
+    }
+}
+
 enum WAVEncoder {
     static func makeWAVData(samples: [Float], sampleRate: UInt32) -> Data {
         let channelCount: UInt16 = 1
@@ -48,7 +70,6 @@ enum WAVEncoder {
 
 final class RecordingArchiveService {
     private let fileManager = FileManager.default
-    private let keepLastCount = 3
 
     func saveRecording(samples16kMono: [Float], sampleRate: UInt32 = 16_000) throws -> URL {
         let recordingsDirectory = try makeRecordingsDirectory()
@@ -57,8 +78,35 @@ final class RecordingArchiveService {
 
         let wavData = WAVEncoder.makeWAVData(samples: samples16kMono, sampleRate: sampleRate)
         try wavData.write(to: fileURL, options: .atomic)
-        try pruneRecordings(in: recordingsDirectory)
         return fileURL
+    }
+
+    func recordingsDirectoryURL() throws -> URL {
+        try makeRecordingsDirectory()
+    }
+
+    func archiveStats() throws -> (directory: URL, recordingsCount: Int, totalBytes: Int64) {
+        let directory = try makeRecordingsDirectory()
+        let fileURLs = try fileManager.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: [.fileSizeKey],
+            options: [.skipsHiddenFiles]
+        )
+
+        var count = 0
+        var bytes: Int64 = 0
+        for url in fileURLs where url.pathExtension.lowercased() == "wav" {
+            count += 1
+            let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
+            bytes += Int64(size)
+        }
+
+        return (directory, count, bytes)
+    }
+
+    func applyRetention(_ policy: RecordingRetentionPolicy) throws {
+        let directory = try makeRecordingsDirectory()
+        try pruneRecordings(in: directory, policy: policy)
     }
 
     func saveTranscriptJSON(
@@ -104,7 +152,7 @@ final class RecordingArchiveService {
         return dir
     }
 
-    private func pruneRecordings(in directory: URL) throws {
+    private func pruneRecordings(in directory: URL, policy: RecordingRetentionPolicy) throws {
         let fileURLs = try fileManager.contentsOfDirectory(
             at: directory,
             includingPropertiesForKeys: [.contentModificationDateKey],
@@ -112,7 +160,7 @@ final class RecordingArchiveService {
         )
 
         let wavs = fileURLs.filter { $0.pathExtension.lowercased() == "wav" }
-        if wavs.count <= keepLastCount {
+        guard !wavs.isEmpty else {
             return
         }
 
@@ -122,7 +170,27 @@ final class RecordingArchiveService {
             return lDate > rDate
         }
 
-        for old in sorted.dropFirst(keepLastCount) {
+        let toDelete: [URL]
+        switch policy {
+        case .keepAll:
+            toDelete = []
+        case .keepLast5:
+            toDelete = Array(sorted.dropFirst(5))
+        case .keepLast3Days:
+            let threshold = Date().addingTimeInterval(-3 * 24 * 60 * 60)
+            toDelete = try sorted.filter { url in
+                let date = try url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate ?? .distantPast
+                return date < threshold
+            }
+        case .keepLast5Days:
+            let threshold = Date().addingTimeInterval(-5 * 24 * 60 * 60)
+            toDelete = try sorted.filter { url in
+                let date = try url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate ?? .distantPast
+                return date < threshold
+            }
+        }
+
+        for old in toDelete {
             try? fileManager.removeItem(at: old)
             let siblingJSON = old.deletingPathExtension().appendingPathExtension("json")
             try? fileManager.removeItem(at: siblingJSON)

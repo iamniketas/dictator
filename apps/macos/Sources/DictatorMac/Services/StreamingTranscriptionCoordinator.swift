@@ -19,6 +19,7 @@ final class StreamingTranscriptionCoordinator {
     private var accumulatedTranscript = ""
     private var isChunkTranscribing = false
     private var chunksProcessed = 0
+    private var hadChunkFailures = false
 
     func reset() {
         loopTask?.cancel()
@@ -27,6 +28,7 @@ final class StreamingTranscriptionCoordinator {
         accumulatedTranscript = ""
         isChunkTranscribing = false
         chunksProcessed = 0
+        hadChunkFailures = false
     }
 
     func startLoop(
@@ -57,7 +59,7 @@ final class StreamingTranscriptionCoordinator {
                     continue
                 }
 
-                try? await Task.sleep(for: .milliseconds(350))
+                try? await Task.sleep(for: .milliseconds(220))
             }
             onEvent(.loopStateChanged(false))
         }
@@ -73,9 +75,9 @@ final class StreamingTranscriptionCoordinator {
 
         let waitStartedAt = Date()
         while isChunkTranscribing {
-            if Date().timeIntervalSince(waitStartedAt) > 15 {
-                isChunkTranscribing = false
-                break
+            if Date().timeIntervalSince(waitStartedAt) > 45 {
+                hadChunkFailures = true
+                return .needsFullFallback
             }
             try? await Task.sleep(for: .milliseconds(100))
         }
@@ -88,7 +90,7 @@ final class StreamingTranscriptionCoordinator {
         )
 
         let trimmed = accumulatedTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty {
+        if trimmed.isEmpty || hadChunkFailures {
             return .needsFullFallback
         }
         return .text(trimmed)
@@ -114,8 +116,8 @@ final class StreamingTranscriptionCoordinator {
             return
         }
 
-        let snapshot = snapshotProvider(processedNativeIndex)
-        processedNativeIndex = snapshot.nextIndex
+        let startIndex = processedNativeIndex
+        let snapshot = snapshotProvider(startIndex)
 
         if snapshot.samples.isEmpty {
             return
@@ -130,26 +132,42 @@ final class StreamingTranscriptionCoordinator {
         isChunkTranscribing = true
         onEvent(.chunkStarted)
 
-        do {
-            let text = try await transcribeChunk(chunk16k)
-            chunksProcessed += 1
+        var lastErrorMessage = "Unknown streaming error"
+        var didSucceed = false
 
-            if !text.isEmpty {
-                if !accumulatedTranscript.isEmpty {
-                    accumulatedTranscript.append(" ")
+        for attempt in 0..<3 {
+            do {
+                let text = try await transcribeChunk(chunk16k)
+                chunksProcessed += 1
+                processedNativeIndex = snapshot.nextIndex
+
+                if !text.isEmpty {
+                    if !accumulatedTranscript.isEmpty {
+                        accumulatedTranscript.append(" ")
+                    }
+                    accumulatedTranscript.append(text)
                 }
-                accumulatedTranscript.append(text)
-            }
 
-            onEvent(
-                .chunkCompleted(
-                    chunksProcessed: chunksProcessed,
-                    audioSeconds: audioSeconds,
-                    accumulatedText: accumulatedTranscript
+                onEvent(
+                    .chunkCompleted(
+                        chunksProcessed: chunksProcessed,
+                        audioSeconds: audioSeconds,
+                        accumulatedText: accumulatedTranscript
+                    )
                 )
-            )
-        } catch {
-            onEvent(.chunkFailed(error.localizedDescription))
+                didSucceed = true
+                break
+            } catch {
+                lastErrorMessage = error.localizedDescription
+                if attempt < 2 {
+                    try? await Task.sleep(for: .milliseconds(320))
+                }
+            }
+        }
+
+        if !didSucceed {
+            hadChunkFailures = true
+            onEvent(.chunkFailed(lastErrorMessage))
         }
 
         isChunkTranscribing = false

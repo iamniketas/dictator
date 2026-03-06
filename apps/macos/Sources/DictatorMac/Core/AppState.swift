@@ -104,6 +104,15 @@ final class AppModel: ObservableObject {
     @Published var lastStreamingSpeedupVsNormal: Double = 0
     @Published var lastSavedRecordingPath = ""
     @Published var lastSavedTranscriptPath = ""
+    @Published var recordingsDirectoryPath = ""
+    @Published var recordingsCount = 0
+    @Published var recordingsTotalBytes: Int64 = 0
+    @Published var recordingRetentionPolicy: RecordingRetentionPolicy = .keepLast5 {
+        didSet {
+            settingsStore.saveRecordingRetentionPolicy(recordingRetentionPolicy)
+            applyRetentionPolicyAndRefresh()
+        }
+    }
 
     @Published var statusMessage = "Idle"
     @Published var lastTranscript = "No text yet."
@@ -138,6 +147,8 @@ final class AppModel: ObservableObject {
         textInjectionMode = settingsStore.loadTextInjectionMode(default: textInjectionMode)
         transcriptionLanguage = settingsStore.loadTranscriptionLanguage(default: transcriptionLanguage)
         transcriptionEndpoint = settingsStore.loadTranscriptionEndpoint(default: transcriptionEndpoint)
+        recordingRetentionPolicy = settingsStore.loadRecordingRetentionPolicy(default: recordingRetentionPolicy)
+        applyRetentionPolicyAndRefresh()
     }
 
     func toggleRecording(sourceAppPID: pid_t? = nil) {
@@ -238,14 +249,15 @@ final class AppModel: ObservableObject {
                 let savedURL = try recordingArchive.saveRecording(samples16kMono: result.samples16kMono)
                 lastSavedRecordingPath = savedURL.path
                 currentRecordingFileURL = savedURL
+                applyRetentionPolicyAndRefresh()
             } catch {
                 statusMessage = "Recording was kept in memory only."
             }
 
             if streamingEnabled {
                 if case .needsFullFallback = streamingFinalization {
-                    statusMessage = "No streaming text yet. Running full pass..."
-                    lastTranscript = "Running full transcription..."
+                    statusMessage = "Streaming incomplete. Running full pass..."
+                    lastTranscript = "Streaming was incomplete. Running full transcription..."
                     runTranscription(samples16k: result.samples16kMono, audioDurationSeconds: result.durationSeconds, mode: .streamingFallback)
                 } else if case let .text(trimmed) = streamingFinalization {
                     lastTranscriptionDurationSeconds = Date().timeIntervalSince(postStopStartedAt ?? Date())
@@ -441,8 +453,31 @@ final class AppModel: ObservableObject {
                 errorMessage: errorMessage
             )
             lastSavedTranscriptPath = url.path
+            refreshArchiveStats()
         } catch {
             // Keep the main flow stable even if transcript archive write fails.
+        }
+    }
+
+    func refreshArchiveStats() {
+        do {
+            let stats = try recordingArchive.archiveStats()
+            recordingsDirectoryPath = stats.directory.path
+            recordingsCount = stats.recordingsCount
+            recordingsTotalBytes = stats.totalBytes
+        } catch {
+            recordingsDirectoryPath = "Unavailable"
+            recordingsCount = 0
+            recordingsTotalBytes = 0
+        }
+    }
+
+    func openRecordingsFolder() {
+        do {
+            let dir = try recordingArchive.recordingsDirectoryURL()
+            NSWorkspace.shared.open(dir)
+        } catch {
+            statusMessage = "Couldn't open recordings folder"
         }
     }
 
@@ -659,6 +694,15 @@ final class AppModel: ObservableObject {
         postStopTickerTask?.cancel()
         postStopTickerTask = nil
         postStopStartedAt = nil
+    }
+
+    private func applyRetentionPolicyAndRefresh() {
+        do {
+            try recordingArchive.applyRetention(recordingRetentionPolicy)
+        } catch {
+            // Keep recording flow stable if retention cleanup fails.
+        }
+        refreshArchiveStats()
     }
 
     private func transcriptionTimeoutSeconds(

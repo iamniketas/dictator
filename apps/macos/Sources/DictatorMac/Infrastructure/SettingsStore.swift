@@ -9,6 +9,7 @@ final class SettingsStore {
         static let textInjectionMode = "dictator.textInjectionMode"
         static let transcriptionLanguage = "dictator.transcriptionLanguage"
         static let transcriptionEndpoint = "dictator.transcriptionEndpoint"
+        static let recordingRetentionPolicy = "dictator.recordingRetentionPolicy"
     }
 
     private let defaults: UserDefaults
@@ -83,6 +84,20 @@ final class SettingsStore {
 
     func saveTranscriptionEndpoint(_ value: String) {
         defaults.set(value, forKey: Key.transcriptionEndpoint)
+    }
+
+    func loadRecordingRetentionPolicy(default defaultValue: RecordingRetentionPolicy) -> RecordingRetentionPolicy {
+        guard
+            let raw = readString(Key.recordingRetentionPolicy),
+            let value = RecordingRetentionPolicy(rawValue: raw)
+        else {
+            return defaultValue
+        }
+        return value
+    }
+
+    func saveRecordingRetentionPolicy(_ value: RecordingRetentionPolicy) {
+        defaults.set(value.rawValue, forKey: Key.recordingRetentionPolicy)
     }
 
     private func readBool(_ key: String) -> Bool? {
