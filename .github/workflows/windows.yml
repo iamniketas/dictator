@@ -32,8 +32,16 @@ jobs:
         with:
           workspaces: apps/windows
 
+      # whisper-rs-sys uses bindgen which requires libclang
+      - name: Install LLVM
+        run: choco install llvm --no-progress -y
+
       - name: Cargo check
+        env:
+          LIBCLANG_PATH: 'C:\Program Files\LLVM\bin'
         run: cargo check --all-targets
 
       - name: Cargo test
+        env:
+          LIBCLANG_PATH: 'C:\Program Files\LLVM\bin'
         run: cargo test --all-targets

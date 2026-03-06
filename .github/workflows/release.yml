@@ -34,8 +34,14 @@ jobs:
         with:
           workspaces: apps/windows
 
+      # whisper-rs-sys uses bindgen which requires libclang
+      - name: Install LLVM
+        run: choco install llvm --no-progress -y
+
       - name: Build release binary
         working-directory: apps/windows
+        env:
+          LIBCLANG_PATH: 'C:\Program Files\LLVM\bin'
         run: cargo build --release
 
       # Stage only the exe so vpk doesn't pick up build artifacts
