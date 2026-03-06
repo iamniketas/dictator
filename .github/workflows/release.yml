@@ -63,16 +63,19 @@ jobs:
       #   Releases/dictator-{version}-full.nupkg  — update package
       #   Releases/releases.stable.json            — feed file (updater reads this)
       #   Releases/dictator-{version}-Setup.exe   — installer for first install
+      - name: Show vpk pack help
+        run: vpk pack --help
+
       - name: Package with Velopack
         working-directory: apps/windows
         shell: pwsh
         run: |
           vpk pack `
-            --appId dictator `
-            --version ${{ steps.ver.outputs.VERSION }} `
+            --packId dictator `
+            --packVersion ${{ steps.ver.outputs.VERSION }} `
             --packDir dist `
             --mainExe dictator.exe `
-            --releaseDir Releases `
+            --outputDir Releases `
             --packTitle "Dictator" `
             --icon assets/dictator.ico
 
