@@ -9,9 +9,15 @@ let package = Package(
     products: [
         .executable(name: "DictatorMac", targets: ["DictatorMac"]),
     ],
+    dependencies: [
+        .package(url: "https://github.com/argmaxinc/WhisperKit.git", from: "0.13.0"),
+    ],
     targets: [
         .executableTarget(
             name: "DictatorMac",
+            dependencies: [
+                .product(name: "WhisperKit", package: "WhisperKit"),
+            ],
             path: "Sources/DictatorMac",
             exclude: ["Resources"]
         ),
