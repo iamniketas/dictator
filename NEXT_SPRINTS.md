@@ -1,16 +1,15 @@
 # Next Sprints — Dictator Development Plan
 
-> Last updated: 2026-03-05
-> Repository migrated to multi-platform structure.
+> Last updated: 2026-03-06
 
 ---
 
 ## Current State
 
-- **Windows (Rust):** v0.1.0-alpha in `apps/windows/`, build: `cd apps/windows && cargo build`
+- **Windows (Rust):** v0.3.0 in `apps/windows/`, build: `cd apps/windows && cargo build`
 - **macOS (Swift):** Prototype in `apps/macos/`, single-file `main.swift` (~60KB)
 - **Shared:** Whisper server in `shared/whisper-server/`, contracts in `shared/contracts/`
-- **CI:** GitHub Actions for Windows (`apps/windows/` scope)
+- **CI:** GitHub Actions — Windows CI on push, Release workflow on `v*` tags
 
 ---
 
@@ -38,10 +37,6 @@
 - Scans `whisper.models_dir` (defaults to parent of `model_path`)
 - Checkmark on active model, click saves to config.toml
 - New optional config field `whisper.models_dir`
-
-### Known issues found during testing
-- Faster-whisper inserts double spaces between segments (upstream behavior)
-  → Can fix with `.replace("  ", " ")` post-processing if needed
 
 ---
 
@@ -83,12 +78,11 @@
 - Environment variable override: `WHISPER_MODELS_DIR`
 
 ### C2: Memory Management ✅ DONE (2026-03-06)
-- Auto-unload whisper server after idle (default: 5 min)
+- Auto-unload whisper engine after idle (default: 5 min)
 - Config: `[memory] idle_unload_minutes` (0 = never)
-- Server stays running between recordings; idle timer stops it
-- `stop_if_owned()` retained only on hard errors (audio/transcription failure)
+- `idle_unload_minutes` configurable via Settings window
 
-### C3: History Module (P1) ✅ DONE (earlier)
+### C3: History Module ✅ DONE (earlier)
 - JSON metadata + WAV audio + TXT per recording in `recordings/YYYY-MM-DD/`
 - Configurable retention_days (default 7), max_recent in tray (default 5)
 - "Open Folder" and "Copy to Clipboard" tray actions
@@ -104,7 +98,7 @@
 
 ### D2: Model Comparison Matrix
 - Test on identical audio samples:
-  - faster-whisper large-v2 (CUDA)
+  - whisper-rs GGML large-v3 (CPU + CUDA)
   - Parakeet V3 (CPU + CUDA)
   - WhisperKit (Apple Silicon)
   - Distil-Whisper (faster, lower quality)
@@ -115,56 +109,16 @@
 **New default backend — no Python required.**
 
 #### Architecture
-- `whisper_engine.rs`: new module wrapping `whisper-rs 0.14`
+- `whisper_engine.rs`: module wrapping `whisper-rs 0.14`
 - `SharedEngine = Arc<Mutex<Option<WhisperEngine>>>` — lazy load, idle unload
 - `config.whisper.backend`: `"embedded"` (default) | `"server"` (legacy Python)
-
-#### Changes
-- `whisper_engine.rs`: `WhisperEngine::load()`, `transcribe()`, `SharedEngine` helpers
-- `config.rs`: `WhisperBackend` enum, added to `WhisperConfig`
-- `streaming.rs`: `StreamingTranscriber::new_embedded()` for embedded path
-- `main.rs`: engine creation, backend-aware transcription, idle timer uses `unload_engine()`
-- Model scan: `.bin` files for embedded, directories for server (legacy CTranslate2)
-- `.cargo/config.toml`: `LIBCLANG_PATH` pointed to VS 2022 LLVM (for bindgen)
 
 #### Prerequisites
 - **Model**: download GGML `.bin` from https://huggingface.co/ggerganov/whisper.cpp
   - Place in `%LocalAppData%\whisper-models\` (shared with Contora)
-  - Example: `ggml-large-v3.bin`, `ggml-medium.bin`
+  - Or download from within the app: Settings → Download Model
 - **GPU**: build with `cargo build --features cuda` (requires CUDA Toolkit)
 - **CPU**: default build, no extra dependencies
-
-#### Migration from faster-whisper (server backend)
-Add to `config.toml`:
-```toml
-[whisper]
-backend = "server"  # keep using Python HTTP server
-```
-Or switch to embedded (recommended):
-1. Download GGML model to `%LocalAppData%\whisper-models\`
-2. Set `model_path` to the `.bin` file path
-3. Remove or leave `backend = "embedded"` (it's the default)
-
----
-
-## Questions Inspired by Handy Research
-
-### Architecture
-1. **Parakeet V3 integration** — Handy shows it works well for CPU-only users. Should we support it as a lightweight alternative for machines without NVIDIA GPU?
-2. **Silero VAD** — Handy uses Silero for voice activity detection. Our current VAD relies on Whisper's built-in. Is dedicated VAD worth the complexity for better pause detection?
-3. **whisper-rs vs HTTP server** — Handy embeds whisper.cpp directly via `whisper-rs`. This eliminates the Python dependency but requires C++ toolchain. When should we make this transition for Windows?
-
-### UX
-4. **Remote control via CLI** — Handy supports `--toggle`, `--stop` flags for scripting. Should Dictator expose a local socket/pipe for automation?
-5. **Debug mode** — Handy has a keyboard shortcut to toggle debug overlay. Should we add similar diagnostics (latency, VRAM, model info)?
-
-### Models
-6. **Model auto-download** — Handy downloads models on demand from the app. Should we build a model manager (download, verify, switch) instead of requiring manual setup?
-7. **Model size tiers** — Handy offers small/medium/turbo/large. Should our model selector show speed/quality/size comparison?
-
-### Cross-platform
-8. **Wayland support** — Handy documents significant issues with Wayland (hotkeys, text injection). For our Linux client, should we target X11 first and Wayland as best-effort?
-9. **Single-instance enforcement** — Handy uses a plugin for this. We should implement named mutex (Win) / file lock (Unix) to prevent duplicate instances.
 
 ---
 
@@ -173,137 +127,136 @@ Or switch to embedded (recommended):
 ### E1: Single-Instance Enforcement
 - Named mutex `Global\DictatorSingleInstance` at startup
 - If already running → MessageBox "Check system tray" + clean exit
-- RAII guard `SingleInstanceGuard` releases mutex on app exit
 
-### E2: Ollama Toggle in Tray
-- `OLLAMA_ENABLED` AtomicBool in `ui.rs` — runtime toggle, independent of config.toml
-- Initialized from `config.ollama.enabled` at startup
-- "LLM Correction (Ollama)" menu item with checkmark
-- Recording handler uses `ui::is_ollama_enabled()` (was `config.ollama.enabled`)
+### E2: Ollama Toggle in Tray → moved to Settings window
+- Runtime toggle for LLM correction, independent of config.toml
+
+### E3: Open Config File from Tray → moved to Settings window (About section)
+
+---
 
 ## Sprint F: UX Polish ✅ DONE (2026-03-06)
 
-### F1: Whitespace Normalization (known faster-whisper bug)
-- After transcription, `raw_text.split_whitespace().join(" ")` removes double spaces and trims
-- Fixes upstream faster-whisper behavior of inserting double spaces between segments
+### F1: Whitespace Normalization
+- `raw_text.split_whitespace().join(" ")` after transcription
+- Fixes faster-whisper double-space issue
 
 ### F2: Model Size in Tray Selector
-- `model_dir_size_label()` computes total file size of model directory (single-level scan)
-- `ModelMenuItem` now has `size_label: String` field, e.g. " (3.1 GB)"
-- Displayed as "large-v3 (3.1 GB)" in tray model menu
+- Shows e.g. "large-v3 (3.1 GB)" in tray model menu
+
+### F3: Long Recording Notification
+- After 30s of recording, overlay appends: "Tip: tap hotkey again to stop"
+
+---
 
 ## Sprint G: CLI Remote Control + About ✅ DONE (2026-03-06)
 
 ### G1: CLI --toggle / --stop via Named Windows Events
-- `DictatorToggleEvent` and `DictatorStopEvent` named auto-reset events
-- Main instance: `start_ipc_listener()` creates events and spawns thread, sends `RemoteToggle`/`RemoteStop` to hotkey channel
-- CLI: parsed before single-instance check; `try_signal_remote()` opens + signals event
-  - `dictator.exe --toggle` — toggles recording (shows dialog if not running)
-  - `dictator.exe --stop`   — stops recording silently if active
-- `RemoteToggle`/`RemoteStop` normalized to `RecordStart`/`RecordStop` in event loop
+- `dictator.exe --toggle` — toggles recording
+- `dictator.exe --stop` — stops recording silently
 
-### G2: About Dialog in Tray
-- "About Dictator" menu item above Exit
-- Shows version, hotkey description, and "runs 100% locally" message via MessageBoxW
-
----
-
-### F3: Long Recording Notification in Overlay
-- After 30 seconds of active recording, overlay status appends:
-  "Tip: tap hotkey again to stop"
-- Helps users in PTT mode who forget to release
+### G2: About Dialog
+- Moved to Settings window → About section
 
 ---
 
 ## Sprint H: In-App Model Downloader ✅ DONE (2026-03-06)
 
-### H1: GGML Model Download from Tray
+### H1: GGML Model Download
 - `model_downloader.rs`: known models list (tiny/base/small/medium/large-v3-turbo/large-v3)
-- Downloads from `huggingface.co/ggerganov/whisper.cpp` via `reqwest` blocking with streaming
-- Atomic write: temp file + rename on completion (no partial/corrupt models)
-- Tray: "Download Model ▶" popup submenu with checkmarks for already-downloaded models
+- Downloads from `huggingface.co/ggerganov/whisper.cpp` via streaming HTTP
+- Atomic write: temp file + rename on completion
 - Progress shown in overlay: "Downloading large-v3 (47%)"
-- After success: updates `config.toml model_path`, shows "restart" hint
-- Startup hint: if no model found, overlay shows download instructions for 6 seconds
-- `IS_DOWNLOADING` guard prevents concurrent downloads
+- After success: hot-switches to new model (no restart needed)
+- Startup hint: if no model found, overlay shows instructions for 6 seconds
 
 ---
 
-### E3: Open Config File from Tray
-- "Open Config File" menu item opens config.toml in Notepad
-- Located between "Open Recordings Folder" and "Exit"
-
----
-
----
-
-## Sprint I: Right Ctrl Hotkey + Hot Reload
+## Sprint I: Right Ctrl Hotkey + Hot Reload ✅ DONE (2026-03-06)
 
 ### I1: Switch hotkey from Right Alt to Right Ctrl
 - VK_RCONTROL (0xA3) instead of VK_RMENU (0xA5)
 - Right Alt conflicts with Birman typographic keyboard layout
 
-### I2: Hot reload after model switch (no restart)
-- `Arc<RwLock<PathBuf>>` for active model path — shared between UI callbacks and event thread
-- After model switch or download: update shared path + unload engine
-- Next recording loads new model automatically — no restart needed
+### I2: Hot model reload without restart
+- `Arc<RwLock<PathBuf>>` shared between UI and event thread
+- Model switch or download → update path + unload engine → next recording auto-loads new model
 
 ---
 
-## Sprint K: Tray Cleanup
+## Sprint K: Tray Cleanup ✅ DONE (2026-03-06)
 
-### K1: Slim down tray to quick actions only
-- Remove streaming/chunk controls from tray (move to Settings window)
-- Remove Download Model submenu from tray (move to Settings window)
-- Keep: model selector (quick switch), last 3 recent recordings, Settings, Exit
-- Add "Settings..." item that opens the settings window
+### K1: Slim tray — quick actions only
+- Removed: streaming controls, chunk size, download submenu
+- Kept: model quick-switch, last 3 recordings, Open Recordings Folder, Settings, Exit
+- Added "Settings..." → opens settings window
+- Added "Install Update vX.X" (shown only when update is available)
 
 ---
 
-## Sprint L: Settings Window
+## Sprint L: Native Win32 Settings Window ✅ DONE (2026-03-06)
 
-### L1: Native Win32 settings window
+### L1: Settings window
+- `settings_window.rs` — native Win32 window, no external UI framework
 - Triggered from tray → "Settings..."
 - Sections:
-  - **Models** — list of downloaded models (name, size, active), download button, delete button
-  - **Hotkey** — current hotkey display, picker
-  - **General** — injection method, idle unload timeout, LLM toggle + Ollama URL/model
-  - **About** — version, open logs folder, open config file, GitHub link
-- Native Win32 controls (no external UI framework)
+  - **Models** — installed list, Use / Delete buttons
+  - **Download** — model dropdown + Download button
+  - **General** — injection method, idle unload, LLM toggle, Ollama URL/model
+  - **About** — version, hotkey, Open Logs, Open Config
+- `GWLP_USERDATA` pattern for per-window state, `WM_SETFONT` for system font
 
 ---
 
-## Sprint M: Auto-Updater (Velopack)
+## Sprint M: Auto-Updater (Velopack) ✅ DONE (2026-03-06)
 
 ### M1: Velopack integration
-- Crate: `velopack` (same library Contora uses, has official Rust support)
-- `VelopackApp::build().run()` at startup (required for update finalization)
-- GitHub Releases as update channel (`https://github.com/iamniketas/dictator`)
-- Background update check on startup (non-blocking thread)
-- Tray: "Check for Updates" → "Update available (v1.x) — Install & Restart"
-- After user approves: download + `apply_then_restart()`
+- `updater.rs` with `velopack::sources::HttpSource` → GitHub Releases feed
+- `VelopackApp::build().run()` as first call in `main()`
+- Background update check on startup
+- Tray: "Install Update vX.X" shown when update available
+- On click: download + `apply_updates_and_restart()`
 
-### M2: Release packaging
-- `vpk pack` script to build installer/package
-- GitHub Actions workflow: build → pack → create release
-- Distributable: single `.exe` installer (no manual build required)
+### M2: GitHub Actions release workflow
+- `.github/workflows/release.yml` — triggers on `v*` tag push
+- Steps: checkout → LLVM install → `cargo build --release` → `vpk pack` → GitHub Release
+- Publishes: `dictator-win-Setup.exe`, `dictator-win-Portable.zip`, `dictator-X.X.X-full.nupkg`, `releases.win.json`
+- First release: v0.3.0
+
+---
+
+## Up Next
+
+### Sprint N: macOS — MVP Foundation (Sprint B)
+- Modularize `main.swift`, integrate WhisperKit
+- macOS development done on macOS machine directly
+
+### Sprint O: Custom Dictionary Editor
+- GUI in Settings window for adding word substitutions
+- Written to a vocabulary file, passed to whisper on load
+
+### Sprint P: Command Mode (Research)
+- Capture selected text + voice command → LLM rewrite → inject result
+- Investigate accessibility API for selected text capture on Windows
 
 ---
 
 ## Priority Order
 
-1. **Sprint A** (Windows P0) ✅ DONE
-2. **Sprint B1-B2** (macOS modularization + WhisperKit) — macOS machine only
-3. **Sprint C1** (shared models) ✅ DONE
-4. **Sprint C2** (memory management) ✅ DONE
-5. **Sprint C3** (history) ✅ DONE (earlier)
-6. **Sprint E** (Windows quality of life) ✅ DONE
-7. **Sprint F** (UX polish) ✅ DONE
-8. **Sprint G** (CLI remote control + About) ✅ DONE
-9. **Sprint D3** (embedded whisper-rs) ✅ DONE
-10. **Sprint H** (in-app model downloader) ✅ DONE
-11. **Sprint I** (Right Ctrl + hot reload) — in progress
-12. **Sprint K** (tray cleanup) — depends on L
-13. **Sprint L** (settings window) — unblocks K
-14. **Sprint M** (Velopack auto-updater) — requires GitHub releases
+1. **Sprint A** ✅ DONE
+2. **Sprint C1** ✅ DONE
+3. **Sprint C2** ✅ DONE
+4. **Sprint C3** ✅ DONE
+5. **Sprint E** ✅ DONE
+6. **Sprint F** ✅ DONE
+7. **Sprint G** ✅ DONE
+8. **Sprint D3** ✅ DONE
+9. **Sprint H** ✅ DONE
+10. **Sprint I** ✅ DONE
+11. **Sprint K** ✅ DONE
+12. **Sprint L** ✅ DONE
+13. **Sprint M** ✅ DONE
+14. **Sprint B1-B4** (macOS) — macOS machine only
 15. **Sprint D1-D2** (model research) — informs future architecture
+16. **Sprint O** (dictionary editor)
+17. **Sprint P** (command mode)

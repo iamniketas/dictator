@@ -8,9 +8,15 @@ Cross-platform project with native clients per OS.
 
 | Platform | Stack | Status | Path |
 |----------|-------|--------|------|
-| **Windows** | Rust + Win32 API | v0.1.0-alpha | [`apps/windows/`](apps/windows/) |
+| **Windows** | Rust + Win32 API | v0.3.0 | [`apps/windows/`](apps/windows/) |
 | **macOS** | Swift + SwiftUI/AppKit | Prototype | [`apps/macos/`](apps/macos/) |
 | **Linux** | TBD | Planned | — |
+
+## Windows — Quick Install
+
+Download `dictator-win-Setup.exe` from [Releases](https://github.com/iamniketas/dictator/releases/latest) and run it.
+
+The app lives in the system tray. Hold **Right Ctrl** to record (Push-to-Talk), or tap to toggle. Text is injected into the active window. Updates are delivered automatically.
 
 ## Core Pipeline (all platforms)
 
@@ -24,16 +30,16 @@ Hotkey (start/stop)
 
 ## Transcription Engines
 
-| Engine | Platform | Acceleration | Notes |
-|--------|----------|-------------|-------|
-| faster-whisper (Python HTTP) | Windows, Linux | CUDA | Current default |
-| WhisperKit | macOS | CoreML / Metal / ANE | Apple Silicon optimized |
-| Parakeet V3 (NVIDIA) | Windows, Linux | CUDA / CPU | Research candidate |
-| whisper.cpp | All | CPU / CUDA / Metal | Fallback option |
+| Engine | Platform | Notes |
+|--------|----------|-------|
+| **whisper-rs (GGML)** | Windows | **Default.** Embedded, no Python required. CPU + CUDA. |
+| WhisperKit | macOS | CoreML / Metal / ANE — Apple Silicon optimized |
+| faster-whisper (Python HTTP) | Windows (legacy) | `backend = "server"` in config |
+| Parakeet V3 (NVIDIA) | Windows, Linux | Research candidate |
 
 ## Shared Infrastructure
 
-- **Whisper HTTP Server** — [`shared/whisper-server/`](shared/whisper-server/) — Python Flask server wrapping faster-whisper, shared with other local projects
+- **Whisper HTTP Server** — [`shared/whisper-server/`](shared/whisper-server/) — Python Flask server wrapping faster-whisper, shared with other local projects (legacy)
 - **Contracts** — [`shared/contracts/`](shared/contracts/) — cross-platform config schema, pipeline states, history format
 - **Documentation** — [`docs/`](docs/)
 
@@ -55,11 +61,11 @@ Hotkey (start/stop)
 
 ## Quick Start
 
-### Windows
+### Windows (from source)
 ```bash
 cd apps/windows
 cargo build --release
-# See apps/windows/README.md for full instructions
+# Requires LLVM for whisper-rs bindgen (see apps/windows/README.md)
 ```
 
 ### macOS
@@ -74,31 +80,31 @@ swift build
 ```
 dictator/
   apps/
-    windows/          # Rust + Win32 native client
-    macos/            # Swift + SwiftUI/AppKit native client
+    windows/          # Rust + Win32 native client (v0.3.0)
+    macos/            # Swift + SwiftUI/AppKit native client (prototype)
   shared/
-    whisper-server/   # Python HTTP server for faster-whisper
+    whisper-server/   # Python HTTP server for faster-whisper (legacy)
     contracts/        # Cross-platform schemas and agreements
   docs/
     MACOS_ROADMAP.md
-    REPO_STRUCTURE_PLAN.md
     archive/          # Historical session reports
   ROADMAP.md          # Feature prioritization and phases
   ARCHITECTURE.md     # Technical architecture overview
+  NEXT_SPRINTS.md     # Development sprint plan
   CLAUDE.md           # AI assistant instructions
 ```
 
 ## Roadmap
 
-See [ROADMAP.md](ROADMAP.md) for detailed feature plan.
+See [NEXT_SPRINTS.md](NEXT_SPRINTS.md) for the detailed sprint plan.
 
-**Phase 1 (MVP+):** Smart hotkeys, audio waveform overlay, flexible text injection, model selector GUI
-**Phase 2 (Polish):** History, memory management, LLM post-processing toggle
-**Phase 3 (Advanced):** Custom dictionary editor, Command Mode (AI text editing)
+**Phase 1 (MVP+):** ✅ Smart hotkeys, waveform overlay, flexible injection, model selector, embedded whisper, settings window, auto-updater
+**Phase 2 (Polish):** History ✅, dictionary editor, LLM post-processing improvements
+**Phase 3 (Advanced):** Custom dictionary editor GUI, Command Mode (AI text editing)
 
 ## Related Projects
 
-- **Contora** — local audio recording and transcription app (shares whisper runtime and models on the same machine)
+- **Contora** — local audio recording and transcription app (shares whisper models directory on the same machine)
 
 ## License
 
@@ -106,8 +112,10 @@ Apache 2.0 — see [LICENSE](LICENSE) file for details.
 
 ## Credits
 
-- [faster-whisper](https://github.com/SYSTRAN/faster-whisper) — Fast Whisper implementation
+- [whisper.cpp](https://github.com/ggerganov/whisper.cpp) / [whisper-rs](https://github.com/tazz4843/whisper-rs) — Embedded Whisper inference
+- [faster-whisper](https://github.com/SYSTRAN/faster-whisper) — Fast Whisper implementation (legacy backend)
 - [WhisperKit](https://github.com/argmaxinc/WhisperKit) — On-device speech recognition for Apple Silicon
 - [cpal](https://github.com/RustAudio/cpal) — Cross-platform audio I/O
 - [windows-rs](https://github.com/microsoft/windows-rs) — Rust bindings for Windows API
+- [Velopack](https://velopack.io) — Auto-update framework
 - [Handy](https://github.com/cjpais/Handy) — Open-source voice dictation (architecture reference)
