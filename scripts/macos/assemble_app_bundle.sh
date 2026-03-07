@@ -27,6 +27,7 @@ fi
 
 rm -rf "$APP_DIR"
 mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Frameworks" "$APP_DIR/Contents/Resources"
+ln -sfn Frameworks "$APP_DIR/Contents/lib"
 
 cp "$BIN_PATH" "$APP_DIR/Contents/MacOS/$EXECUTABLE_NAME"
 chmod +x "$APP_DIR/Contents/MacOS/$EXECUTABLE_NAME"
