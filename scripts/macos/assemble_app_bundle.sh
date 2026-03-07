@@ -72,4 +72,9 @@ for bundle in "$BUILD_PRODUCTS_DIR"/*.bundle; do
   fi
 done
 
+# Sparkle appcast generation validates Apple code signing.
+# For CI release artifacts we use ad-hoc signing to satisfy bundle integrity checks.
+codesign --force --deep --sign - "$APP_DIR"
+codesign --verify --deep --strict "$APP_DIR"
+
 echo "APP_DIR=$APP_DIR"
