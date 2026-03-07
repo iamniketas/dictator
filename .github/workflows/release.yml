@@ -109,12 +109,12 @@ jobs:
           SPARKLE_PUBLIC_KEY: ${{ secrets.SPARKLE_PUBLIC_KEY }}
           FEED_URL: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/sparkle/appcast.xml
         run: |
+          cd apps/macos
           xcodebuild \
-            -packagePath apps/macos \
             -scheme DictatorMac \
             -configuration Release \
             -destination "platform=macOS" \
-            -derivedDataPath build/macos-derived \
+            -derivedDataPath ../../build/macos-derived \
             INFOPLIST_KEY_CFBundleShortVersionString="$VERSION" \
             INFOPLIST_KEY_CFBundleVersion="$VERSION" \
             INFOPLIST_KEY_SUPublicEDKey="$SPARKLE_PUBLIC_KEY" \
