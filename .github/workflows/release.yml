@@ -1,22 +1,20 @@
-name: Release (Windows)
+name: Release (Windows + macOS)
 
-# Triggers on version tags: git tag v1.0.0 && git push origin v1.0.0
 on:
   push:
     tags:
       - 'v*'
 
 jobs:
-  release:
+  release-windows:
     runs-on: windows-latest
     permissions:
-      contents: write  # required to create GitHub Releases and upload assets
+      contents: write
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Extract "1.2.3" from tag "v1.2.3"
       - name: Extract version
         id: ver
         shell: pwsh
@@ -34,7 +32,6 @@ jobs:
         with:
           workspaces: apps/windows
 
-      # whisper-rs-sys uses bindgen which requires libclang
       - name: Install LLVM
         run: choco install llvm --no-progress -y
 
@@ -44,7 +41,6 @@ jobs:
           LIBCLANG_PATH: 'C:\Program Files\LLVM\bin'
         run: cargo build --release
 
-      # Stage only the exe so vpk doesn't pick up build artifacts
       - name: Stage app for packaging
         shell: pwsh
         run: |
@@ -59,10 +55,6 @@ jobs:
       - name: Install vpk CLI
         run: dotnet tool install --global vpk
 
-      # vpk pack generates:
-      #   Releases/dictator-{version}-full.nupkg  — update package
-      #   Releases/releases.stable.json            — feed file (updater reads this)
-      #   Releases/dictator-{version}-Setup.exe   — installer for first install
       - name: Package with Velopack
         working-directory: apps/windows
         shell: pwsh
@@ -76,9 +68,158 @@ jobs:
             --packTitle "Dictator" `
             --icon assets/dictator.ico
 
-      - name: Publish GitHub Release
+      - name: Publish GitHub Release assets (Windows)
         uses: softprops/action-gh-release@v2
         with:
           name: "Dictator v${{ steps.ver.outputs.VERSION }}"
           generate_release_notes: true
           files: apps/windows/Releases/*
+
+  release-macos:
+    runs-on: macos-14
+    permissions:
+      contents: write
+    outputs:
+      appcast_feed_url: ${{ steps.feed.outputs.url }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode 15.4
+        run: sudo xcode-select -s /Applications/Xcode_15.4.app/Contents/Developer
+
+      - name: Extract version
+        id: ver
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "VERSION=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Validate Sparkle secrets
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+          SPARKLE_PUBLIC_KEY: ${{ secrets.SPARKLE_PUBLIC_KEY }}
+        run: |
+          [[ -n "$SPARKLE_PRIVATE_KEY" ]] || { echo "Missing secret: SPARKLE_PRIVATE_KEY"; exit 1; }
+          [[ -n "$SPARKLE_PUBLIC_KEY" ]] || { echo "Missing secret: SPARKLE_PUBLIC_KEY"; exit 1; }
+
+      - name: Build macOS app bundle
+        env:
+          VERSION: ${{ steps.ver.outputs.VERSION }}
+          SPARKLE_PUBLIC_KEY: ${{ secrets.SPARKLE_PUBLIC_KEY }}
+          FEED_URL: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/sparkle/appcast.xml
+        run: |
+          xcodebuild \
+            -packagePath apps/macos \
+            -scheme DictatorMac \
+            -configuration Release \
+            -destination "platform=macOS" \
+            -derivedDataPath build/macos-derived \
+            INFOPLIST_KEY_CFBundleShortVersionString="$VERSION" \
+            INFOPLIST_KEY_CFBundleVersion="$VERSION" \
+            INFOPLIST_KEY_SUPublicEDKey="$SPARKLE_PUBLIC_KEY" \
+            INFOPLIST_KEY_SUFeedURL="$FEED_URL" \
+            build
+
+      - name: Package release artifacts
+        id: package
+        env:
+          VERSION: ${{ steps.ver.outputs.VERSION }}
+        run: |
+          APP_PATH="build/macos-derived/Build/Products/Release/DictatorMac.app"
+          OUT_DIR="build/macos-release"
+          ./scripts/macos/package_release_artifacts.sh "$APP_PATH" "$VERSION" "$OUT_DIR"
+
+          ZIP_PATH="$OUT_DIR/DictatorMac-${VERSION}-macOS.zip"
+          DMG_PATH="$OUT_DIR/DictatorMac-${VERSION}-macOS.dmg"
+          echo "zip=$ZIP_PATH" >> "$GITHUB_OUTPUT"
+          echo "dmg=$DMG_PATH" >> "$GITHUB_OUTPUT"
+
+      - name: Generate Sparkle appcast
+        id: appcast
+        env:
+          TAG: ${{ github.ref_name }}
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: |
+          OUT_DIR="build/macos-release"
+          UPDATES_DIR="build/macos-updates"
+          mkdir -p "$UPDATES_DIR"
+          cp "${{ steps.package.outputs.zip }}" "$UPDATES_DIR/"
+
+          KEY_FILE="build/sparkle_private_key.txt"
+          printf '%s' "$SPARKLE_PRIVATE_KEY" > "$KEY_FILE"
+
+          SPARKLE_DIR="build/Sparkle"
+          git clone --depth 1 --branch 2.9.0 https://github.com/sparkle-project/Sparkle.git "$SPARKLE_DIR"
+
+          ./scripts/macos/generate_appcast.sh \
+            "$SPARKLE_DIR" \
+            "$UPDATES_DIR" \
+            "$KEY_FILE" \
+            "https://github.com/${{ github.repository }}/releases/download/$TAG/"
+
+          cp "$UPDATES_DIR/appcast.xml" "$OUT_DIR/appcast.xml"
+          echo "path=$OUT_DIR/appcast.xml" >> "$GITHUB_OUTPUT"
+
+      - name: Publish GitHub Release assets (macOS)
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "Dictator v${{ steps.ver.outputs.VERSION }}"
+          generate_release_notes: false
+          files: |
+            ${{ steps.package.outputs.zip }}
+            ${{ steps.package.outputs.dmg }}
+            ${{ steps.appcast.outputs.path }}
+
+      - name: Upload appcast site artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sparkle-appcast-site
+          path: ${{ steps.appcast.outputs.path }}
+
+      - name: Expose feed URL
+        id: feed
+        run: |
+          echo "url=https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/sparkle/appcast.xml" >> "$GITHUB_OUTPUT"
+
+  publish-appcast:
+    needs: release-macos
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download appcast artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: sparkle-appcast-site
+          path: site/sparkle
+
+      - name: Deploy appcast to gh-pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_branch: gh-pages
+          publish_dir: site
+          keep_files: true
+
+  verify-release-macos-assets:
+    needs: [release-macos, publish-appcast]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Verify release has Sparkle assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          ASSETS_JSON="$(gh release view \"${GITHUB_REF_NAME}\" --repo \"${GITHUB_REPOSITORY}\" --json assets)"
+          echo "$ASSETS_JSON" | jq -e '.assets[] | select(.name | test("^DictatorMac-.*-macOS\\.zip$"))' >/dev/null
+          echo "$ASSETS_JSON" | jq -e '.assets[] | select(.name | test("^DictatorMac-.*-macOS\\.dmg$"))' >/dev/null
+          echo "$ASSETS_JSON" | jq -e '.assets[] | select(.name == "appcast.xml")' >/dev/null
+
+      - name: Print feed URL
+        run: |
+          echo "Sparkle feed URL: ${{ needs.release-macos.outputs.appcast_feed_url }}"

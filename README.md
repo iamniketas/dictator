@@ -75,6 +75,9 @@ swift build
 # See apps/macos/README.md for full instructions
 ```
 
+Sparkle release pipeline:
+- [docs/MACOS_SPARKLE_RELEASE.md](/Users/n.likhachev/Documents/projects/dictator/docs/MACOS_SPARKLE_RELEASE.md)
+
 ## Project Structure
 
 ```

@@ -76,3 +76,15 @@ Settings now include a dedicated onboarding section with:
 - live microphone/accessibility status,
 - one-click permission prompts,
 - shortcuts to system privacy pages.
+
+## Update flow (Sparkle contour)
+
+- Tray menu has a quiet update block at the top (status, details, install now, install on next launch, skip version, manual check).
+- Primary install engine is `Sparkle` when feed is configured.
+- Feed URL is resolved from `DICTATOR_SPARKLE_FEED_URL` first, then `SUFeedURL` in app Info.plist.
+- If Sparkle probe is unavailable/fails, update check falls back to GitHub Releases API.
+- "Install on next launch" persists the target version and auto-starts install on the next app launch after that version is detected.
+
+Release automation details:
+
+- [docs/MACOS_SPARKLE_RELEASE.md](/Users/n.likhachev/Documents/projects/dictator/docs/MACOS_SPARKLE_RELEASE.md)

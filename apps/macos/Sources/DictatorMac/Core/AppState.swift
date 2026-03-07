@@ -10,6 +10,11 @@ enum PermissionStatus: String {
     case denied = "Denied"
 }
 
+enum UpdateInstallPolicy: String {
+    case installNow
+    case installOnNextLaunch
+}
+
 @MainActor
 final class PermissionState: ObservableObject {
     @Published var microphone: PermissionStatus = .unknown
@@ -117,6 +122,18 @@ final class AppModel: ObservableObject {
     @Published var statusMessage = "Idle"
     @Published var lastTranscript = "No text yet."
     @Published var lastInjectionStatus = "No output yet."
+    @Published var appVersion = "0.0.0"
+    @Published var updateStatusLine = "Updates: Not checked"
+    @Published var updateDetailLine = "No update scheduled."
+    @Published var updateEngineLine = "Updater: Release page"
+    @Published var availableUpdateVersion: String?
+    @Published var installUpdateOnNextLaunch = true {
+        didSet {
+            settingsStore.saveInstallUpdateOnNextLaunch(installUpdateOnNextLaunch)
+            syncPendingInstallVersionForCurrentState()
+            refreshUpdateDetailLine()
+        }
+    }
 
     let permissions = PermissionState()
 
@@ -126,6 +143,8 @@ final class AppModel: ObservableObject {
     private let recordingArchive = RecordingArchiveService()
     private let streamingCoordinator = StreamingTranscriptionCoordinator()
     private let textInjection = TextInjectionService()
+    private let updateService: UpdateService = GitHubReleaseUpdateService()
+    private let updateInstallService: UpdateInstallService = SparkleUpdateInstallService()
     private let settingsStore = SettingsStore()
 
     private var recordingTickerTask: Task<Void, Never>?
@@ -138,8 +157,14 @@ final class AppModel: ObservableObject {
     private var currentRecordingFileURL: URL?
     private var sourceAppPID: pid_t?
     private var didAutoPasteForCurrentRun = false
+    private var updateCheckTask: Task<Void, Never>?
+    private var availableUpdate: AppUpdateInfo?
+    private var skippedUpdateVersion: String?
+    private var pendingInstallVersion: String?
+    private var didAttemptScheduledInstallThisSession = false
 
     private init() {
+        appVersion = Self.detectAppVersion()
         streamingEnabled = settingsStore.loadStreamingEnabled(default: streamingEnabled)
         launchAtLogin = settingsStore.loadLaunchAtLogin(default: launchAtLogin)
         chunkSeconds = settingsStore.loadChunkSeconds(default: chunkSeconds)
@@ -148,7 +173,12 @@ final class AppModel: ObservableObject {
         transcriptionLanguage = settingsStore.loadTranscriptionLanguage(default: transcriptionLanguage)
         transcriptionEndpoint = settingsStore.loadTranscriptionEndpoint(default: transcriptionEndpoint)
         recordingRetentionPolicy = settingsStore.loadRecordingRetentionPolicy(default: recordingRetentionPolicy)
+        installUpdateOnNextLaunch = settingsStore.loadInstallUpdateOnNextLaunch(default: installUpdateOnNextLaunch)
+        skippedUpdateVersion = settingsStore.loadSkippedUpdateVersion()
+        pendingInstallVersion = settingsStore.loadPendingInstallVersion()
         applyRetentionPolicyAndRefresh()
+        updateEngineLine = "Updater: \(updateInstallService.engineName)"
+        refreshUpdateDetailLine()
     }
 
     func toggleRecording(sourceAppPID: pid_t? = nil) {
@@ -481,6 +511,150 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func startUpdateChecks() {
+        updateCheckTask?.cancel()
+        updateCheckTask = Task { [weak self] in
+            guard let self else { return }
+            await self.checkForUpdates(manual: false)
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(21_600))
+                await self.checkForUpdates(manual: false)
+            }
+        }
+    }
+
+    func checkForUpdates(manual: Bool) async {
+        updateStatusLine = "Updates: Checking..."
+        do {
+            var usedFallback = false
+            let info: AppUpdateInfo?
+            if updateInstallService.isSupported {
+                do {
+                    info = try await updateInstallService.probeForUpdate(currentVersion: appVersion)
+                } catch {
+                    usedFallback = true
+                    info = try await updateService.checkForUpdate(currentVersion: appVersion)
+                }
+            } else {
+                usedFallback = true
+                info = try await updateService.checkForUpdate(currentVersion: appVersion)
+            }
+
+            if updateInstallService.isSupported {
+                updateEngineLine = usedFallback
+                    ? "Updater: Sparkle (check fallback: GitHub)"
+                    : "Updater: Sparkle"
+            } else {
+                updateEngineLine = "Updater: Release page"
+            }
+
+            if let info {
+                if skippedUpdateVersion == info.version {
+                    updateStatusLine = "Updates: v\(info.version) skipped"
+                    availableUpdate = nil
+                    availableUpdateVersion = nil
+                    syncPendingInstallVersionForCurrentState()
+                    refreshUpdateDetailLine()
+                    return
+                }
+
+                availableUpdate = info
+                availableUpdateVersion = info.version
+                syncPendingInstallVersionForCurrentState()
+                updateStatusLine = "Update available: v\(info.version)"
+                refreshUpdateDetailLine()
+                maybeInstallScheduledUpdate(version: info.version)
+                return
+            }
+
+            availableUpdate = nil
+            availableUpdateVersion = nil
+            syncPendingInstallVersionForCurrentState()
+            updateStatusLine = manual ? "Updates: You are up to date" : "Updates: Up to date"
+            refreshUpdateDetailLine()
+        } catch {
+            updateStatusLine = "Updates: Check failed"
+            if manual {
+                updateDetailLine = error.localizedDescription
+            }
+        }
+    }
+
+    func installUpdateNow() {
+        guard let info = availableUpdate else {
+            return
+        }
+        installUpdateOnNextLaunch = false
+        pendingInstallVersion = nil
+        settingsStore.savePendingInstallVersion(nil)
+        if updateInstallService.installUpdateNow() {
+            updateDetailLine = "Starting \(updateInstallService.engineName) update..."
+            return
+        }
+        NSWorkspace.shared.open(info.htmlURL)
+        updateDetailLine = "Opening release page for v\(info.version)..."
+    }
+
+    func skipAvailableUpdate() {
+        guard let version = availableUpdateVersion else {
+            return
+        }
+        skippedUpdateVersion = version
+        settingsStore.saveSkippedUpdateVersion(version)
+        availableUpdate = nil
+        availableUpdateVersion = nil
+        updateStatusLine = "Updates: v\(version) skipped"
+        syncPendingInstallVersionForCurrentState()
+        refreshUpdateDetailLine()
+    }
+
+    private func refreshUpdateDetailLine() {
+        guard let version = availableUpdateVersion else {
+            updateDetailLine = "No update scheduled."
+            return
+        }
+
+        if installUpdateOnNextLaunch {
+            updateDetailLine = "v\(version) will be installed on next launch."
+        } else {
+            updateDetailLine = "v\(version) is available."
+        }
+    }
+
+    private func syncPendingInstallVersionForCurrentState() {
+        guard installUpdateOnNextLaunch, let version = availableUpdateVersion else {
+            pendingInstallVersion = nil
+            settingsStore.savePendingInstallVersion(nil)
+            return
+        }
+        pendingInstallVersion = version
+        settingsStore.savePendingInstallVersion(version)
+    }
+
+    private func maybeInstallScheduledUpdate(version: String) {
+        guard installUpdateOnNextLaunch else {
+            return
+        }
+        guard pendingInstallVersion == version else {
+            return
+        }
+        guard !didAttemptScheduledInstallThisSession else {
+            return
+        }
+
+        didAttemptScheduledInstallThisSession = true
+        if updateInstallService.installUpdateNow() {
+            updateDetailLine = "Starting scheduled update v\(version)..."
+            pendingInstallVersion = nil
+            settingsStore.savePendingInstallVersion(nil)
+        } else if let info = availableUpdate {
+            NSWorkspace.shared.open(info.htmlURL)
+            updateDetailLine = "Opening release page for scheduled v\(version)..."
+            pendingInstallVersion = nil
+            settingsStore.savePendingInstallVersion(nil)
+        }
+    }
+
     private func copyAndPasteTranscript(_ text: String) {
         if didAutoPasteForCurrentRun {
             return
@@ -749,6 +923,14 @@ final class AppModel: ObservableObject {
             group.cancelAll()
             return first
         }
+    }
+
+    private static func detectAppVersion() -> String {
+        if let short = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String,
+           !short.isEmpty {
+            return short
+        }
+        return "0.0.0"
     }
 
     private func formatSeconds(_ value: Double) -> String {

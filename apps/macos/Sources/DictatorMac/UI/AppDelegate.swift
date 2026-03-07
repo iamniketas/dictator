@@ -7,6 +7,13 @@ import SwiftUI
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let model = AppModel.shared
     private var statusItem: NSStatusItem?
+    private var updateStatusItem: NSMenuItem?
+    private var updateDetailItem: NSMenuItem?
+    private var updateEngineItem: NSMenuItem?
+    private var updateInstallNowItem: NSMenuItem?
+    private var updateInstallOnNextLaunchItem: NSMenuItem?
+    private var updateCheckItem: NSMenuItem?
+    private var updateSkipItem: NSMenuItem?
     private var statusSummaryItem: NSMenuItem?
     private var hotkeySummaryItem: NSMenuItem?
     private var recordItem: NSMenuItem?
@@ -26,6 +33,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         buildStatusItem()
         bindState()
         model.permissions.refresh()
+        model.startUpdateChecks()
         shortcutMonitor = HotkeyManager { [weak self] in
             Task { @MainActor in
                 let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier
@@ -47,6 +55,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let menu = NSMenu()
         menu.autoenablesItems = false
+
+        let updateStatus = NSMenuItem(title: "Updates: Not checked", action: nil, keyEquivalent: "")
+        updateStatus.isEnabled = false
+        menu.addItem(updateStatus)
+
+        let updateDetail = NSMenuItem(title: "No update scheduled.", action: nil, keyEquivalent: "")
+        updateDetail.isEnabled = false
+        menu.addItem(updateDetail)
+
+        let updateEngine = NSMenuItem(title: "Updater: Release page", action: nil, keyEquivalent: "")
+        updateEngine.isEnabled = false
+        menu.addItem(updateEngine)
+
+        let updateInstallNow = NSMenuItem(title: "Install Update Now", action: #selector(installUpdateNow), keyEquivalent: "")
+        updateInstallNow.target = self
+        menu.addItem(updateInstallNow)
+
+        let updateInstallOnNextLaunch = NSMenuItem(title: "Install on Next Launch", action: #selector(toggleInstallOnNextLaunch), keyEquivalent: "")
+        updateInstallOnNextLaunch.target = self
+        menu.addItem(updateInstallOnNextLaunch)
+
+        let updateCheck = NSMenuItem(title: "Check for Updates", action: #selector(checkForUpdates), keyEquivalent: "")
+        updateCheck.target = self
+        menu.addItem(updateCheck)
+
+        let updateSkip = NSMenuItem(title: "Skip This Version", action: #selector(skipThisUpdate), keyEquivalent: "")
+        updateSkip.target = self
+        menu.addItem(updateSkip)
+
+        menu.addItem(.separator())
 
         let summary = NSMenuItem(title: "Status: Ready", action: nil, keyEquivalent: "")
         summary.isEnabled = false
@@ -94,6 +132,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(quitItem)
 
         self.statusSummaryItem = summary
+        self.updateStatusItem = updateStatus
+        self.updateDetailItem = updateDetail
+        self.updateEngineItem = updateEngine
+        self.updateInstallNowItem = updateInstallNow
+        self.updateInstallOnNextLaunchItem = updateInstallOnNextLaunch
+        self.updateCheckItem = updateCheck
+        self.updateSkipItem = updateSkip
         self.hotkeySummaryItem = hotkeySummary
         self.recordItem = record
         self.streamingItem = streaming
@@ -133,6 +178,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         model.$chunkSeconds
             .sink { [weak self] _ in self?.refreshMenuState() }
             .store(in: &cancellables)
+        model.$updateStatusLine
+            .sink { [weak self] _ in self?.refreshMenuState() }
+            .store(in: &cancellables)
+        model.$updateDetailLine
+            .sink { [weak self] _ in self?.refreshMenuState() }
+            .store(in: &cancellables)
+        model.$updateEngineLine
+            .sink { [weak self] _ in self?.refreshMenuState() }
+            .store(in: &cancellables)
+        model.$availableUpdateVersion
+            .sink { [weak self] _ in self?.refreshMenuState() }
+            .store(in: &cancellables)
+        model.$installUpdateOnNextLaunch
+            .sink { [weak self] _ in self?.refreshMenuState() }
+            .store(in: &cancellables)
     }
 
     private func refreshMenuState() {
@@ -143,6 +203,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         chunk8Item?.state = model.chunkSeconds == 8 ? .on : .off
         chunk15Item?.state = model.chunkSeconds == 15 ? .on : .off
         chunkRootItem?.isEnabled = model.streamingEnabled
+        updateStatusItem?.title = model.updateStatusLine
+        updateDetailItem?.title = model.updateDetailLine
+        updateEngineItem?.title = model.updateEngineLine
+        updateInstallNowItem?.isEnabled = model.availableUpdateVersion != nil
+        updateInstallOnNextLaunchItem?.state = model.installUpdateOnNextLaunch ? .on : .off
+        updateInstallOnNextLaunchItem?.isEnabled = model.availableUpdateVersion != nil
+        updateCheckItem?.isEnabled = true
+        updateSkipItem?.isEnabled = model.availableUpdateVersion != nil
         hotkeySummaryItem?.title = "Shortcut: Cmd+Shift+D / Ctrl+Shift+D"
         let isProcessing = model.isFinalizingStop || model.isTranscribing || model.isStreamingChunkTranscribing
         statusItem?.button?.image = statusIconImage(isRecording: model.isRecording, isProcessing: isProcessing)
@@ -306,6 +374,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func toggleLaunchAtLogin() {
         model.launchAtLogin.toggle()
+    }
+
+    @objc private func installUpdateNow() {
+        model.installUpdateNow()
+    }
+
+    @objc private func toggleInstallOnNextLaunch() {
+        model.installUpdateOnNextLaunch.toggle()
+    }
+
+    @objc private func checkForUpdates() {
+        Task { @MainActor in
+            await model.checkForUpdates(manual: true)
+        }
+    }
+
+    @objc private func skipThisUpdate() {
+        model.skipAvailableUpdate()
     }
 
     @objc private func setChunk3() {

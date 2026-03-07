@@ -10,6 +10,9 @@ final class SettingsStore {
         static let transcriptionLanguage = "dictator.transcriptionLanguage"
         static let transcriptionEndpoint = "dictator.transcriptionEndpoint"
         static let recordingRetentionPolicy = "dictator.recordingRetentionPolicy"
+        static let installUpdateOnNextLaunch = "dictator.installUpdateOnNextLaunch"
+        static let skippedUpdateVersion = "dictator.skippedUpdateVersion"
+        static let pendingInstallVersion = "dictator.pendingInstallVersion"
     }
 
     private let defaults: UserDefaults
@@ -98,6 +101,30 @@ final class SettingsStore {
 
     func saveRecordingRetentionPolicy(_ value: RecordingRetentionPolicy) {
         defaults.set(value.rawValue, forKey: Key.recordingRetentionPolicy)
+    }
+
+    func loadInstallUpdateOnNextLaunch(default defaultValue: Bool) -> Bool {
+        readBool(Key.installUpdateOnNextLaunch) ?? defaultValue
+    }
+
+    func saveInstallUpdateOnNextLaunch(_ value: Bool) {
+        defaults.set(value, forKey: Key.installUpdateOnNextLaunch)
+    }
+
+    func loadSkippedUpdateVersion() -> String? {
+        readString(Key.skippedUpdateVersion)
+    }
+
+    func saveSkippedUpdateVersion(_ value: String?) {
+        defaults.set(value, forKey: Key.skippedUpdateVersion)
+    }
+
+    func loadPendingInstallVersion() -> String? {
+        readString(Key.pendingInstallVersion)
+    }
+
+    func savePendingInstallVersion(_ value: String?) {
+        defaults.set(value, forKey: Key.pendingInstallVersion)
     }
 
     private func readBool(_ key: String) -> Bool? {

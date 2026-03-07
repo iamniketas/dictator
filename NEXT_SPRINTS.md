@@ -88,6 +88,18 @@
     - Keep Last 3 Days
     - Keep Last 5 Days
 
+### B6: Sparkle Release + Update Feed ✅ DONE (2026-03-07)
+- Added macOS release contour to `.github/workflows/release.yml` on `v*` tags:
+  - builds `DictatorMac.app` in Release mode,
+  - packages `.zip` (Sparkle archive) and `.dmg` (installer),
+  - generates signed `appcast.xml`,
+  - uploads all assets to GitHub Release.
+- Added automated appcast publishing to `gh-pages`:
+  - feed URL: `https://<owner>.github.io/dictator/sparkle/appcast.xml`.
+- Added release guard step that validates macOS Sparkle assets exist in the tag release.
+- Added Sparkle release runbook:
+  - `docs/MACOS_SPARKLE_RELEASE.md`.
+
 ---
 
 ## Sprint C: Shared Infrastructure
