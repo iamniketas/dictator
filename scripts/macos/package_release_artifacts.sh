@@ -9,6 +9,8 @@ fi
 APP_PATH="$1"
 VERSION="$2"
 OUTPUT_DIR="$3"
+APP_BASENAME="${DICTATOR_BUNDLE_NAME:-Dictator}"
+SIGN_IDENTITY="${DICTATOR_SIGN_IDENTITY:--}"
 
 if [[ ! -d "$APP_PATH" ]]; then
   echo "App bundle not found: $APP_PATH"
@@ -17,7 +19,6 @@ fi
 
 mkdir -p "$OUTPUT_DIR"
 
-APP_BASENAME="DictatorMac"
 ZIP_PATH="$OUTPUT_DIR/${APP_BASENAME}-${VERSION}-macOS.zip"
 DMG_PATH="$OUTPUT_DIR/${APP_BASENAME}-${VERSION}-macOS.dmg"
 
@@ -27,6 +28,7 @@ ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$ZIP_PATH"
 
 TMP_DMG_DIR="$(mktemp -d)"
 cp -R "$APP_PATH" "$TMP_DMG_DIR/"
+ln -s /Applications "$TMP_DMG_DIR/Applications"
 hdiutil create \
   -volname "Dictator" \
   -srcfolder "$TMP_DMG_DIR" \
@@ -34,6 +36,9 @@ hdiutil create \
   -format UDZO \
   "$DMG_PATH"
 rm -rf "$TMP_DMG_DIR"
+
+codesign --force --sign "$SIGN_IDENTITY" --timestamp "$DMG_PATH"
+codesign --verify --verbose=2 "$DMG_PATH"
 
 echo "ZIP_PATH=$ZIP_PATH"
 echo "DMG_PATH=$DMG_PATH"

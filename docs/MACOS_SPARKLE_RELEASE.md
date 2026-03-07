@@ -6,18 +6,21 @@ This document defines the required release flow for Dictator macOS updates with 
 
 On every pushed tag `v*` (example: `v0.4.0`), GitHub Actions now:
 
-1. Builds `DictatorMac.app` (Release).
+1. Builds `Dictator.app` (Release).
 2. Injects Sparkle settings into app Info.plist during build:
    - `SUPublicEDKey`
    - `SUFeedURL`
-3. Packages artifacts:
-   - `DictatorMac-<version>-macOS.zip` (Sparkle update archive)
-   - `DictatorMac-<version>-macOS.dmg` (installer for first install)
-4. Generates and signs `appcast.xml` using Sparkle `generate_appcast`.
-5. Uploads macOS artifacts to GitHub Release.
-6. Publishes `appcast.xml` to `gh-pages` at:
+3. Signs app bundle with `Developer ID Application` certificate.
+4. Notarizes app bundle and staples ticket.
+5. Packages artifacts:
+   - `Dictator-<version>-macOS.zip` (Sparkle update archive)
+   - `Dictator-<version>-macOS.dmg` (installer for first install, includes `Applications` shortcut)
+6. Signs + notarizes DMG and staples ticket.
+7. Generates and signs `appcast.xml` using Sparkle `generate_appcast`.
+7. Uploads macOS artifacts to GitHub Release.
+8. Publishes `appcast.xml` to `gh-pages` at:
    - `https://<owner>.github.io/dictator/sparkle/appcast.xml`
-7. Verifies release assets are present.
+9. Verifies release assets are present.
 
 Windows release packaging remains in the same tag workflow.
 
@@ -27,12 +30,25 @@ Set these repository secrets before pushing a release tag:
 
 - `SPARKLE_PRIVATE_KEY` — Sparkle EdDSA private key (base64 secret).
 - `SPARKLE_PUBLIC_KEY` — matching public key (value used in `SUPublicEDKey`).
+- `MACOS_DEVELOPER_ID_APP_CERT_P12_BASE64` — base64-encoded `.p12` for `Developer ID Application`.
+- `MACOS_DEVELOPER_ID_APP_CERT_PASSWORD` — password for the `.p12`.
+- `MACOS_DEVELOPER_ID_APP_SIGNING_IDENTITY` — exact codesign identity string, e.g. `Developer ID Application: Your Name (TEAMID)`.
+- `MACOS_NOTARY_KEY_ID` — App Store Connect API key ID.
+- `MACOS_NOTARY_ISSUER_ID` — App Store Connect issuer ID.
+- `MACOS_NOTARY_API_KEY_P8_BASE64` — base64-encoded contents of `AuthKey_<KEY_ID>.p8`.
 
 If any secret is missing, macOS release job fails.
 
 ## One-time key setup (local)
 
 Use Sparkle `generate_keys` and store output keys in GitHub Secrets.
+
+Create Developer ID and notarization credentials:
+
+1. In Apple Developer account, issue `Developer ID Application` certificate.
+2. Export it from Keychain as `.p12` (with password), then base64-encode it.
+3. In App Store Connect, create API key for notarization (`.p8`, key id, issuer id).
+4. Store all values in repository secrets listed above.
 
 - Keep the private key secret out of source control.
 - Public key can be shared and embedded in app build settings.
