@@ -97,17 +97,23 @@ for bundle in "$BUILD_PRODUCTS_DIR"/*.bundle; do
 done
 
 # Sign nested code first, then sign app bundle.
+if [[ "$SIGN_IDENTITY" == "-" ]]; then
+  SIGN_ARGS=(--force --sign -)
+else
+  SIGN_ARGS=(--force --sign "$SIGN_IDENTITY" --timestamp --options runtime)
+fi
+
 if [[ -d "$APP_DIR/Contents/Frameworks" ]]; then
   while IFS= read -r -d '' framework; do
-    codesign --force --sign "$SIGN_IDENTITY" --timestamp --options runtime "$framework"
+    codesign "${SIGN_ARGS[@]}" "$framework"
   done < <(find "$APP_DIR/Contents/Frameworks" -type d -name "*.framework" -print0)
 fi
 
 while IFS= read -r -d '' bundle; do
-  codesign --force --sign "$SIGN_IDENTITY" --timestamp --options runtime "$bundle"
+  codesign "${SIGN_ARGS[@]}" "$bundle"
 done < <(find "$APP_DIR/Contents/Resources" -type d -name "*.bundle" -print0)
 
-codesign --force --sign "$SIGN_IDENTITY" --timestamp --options runtime "$APP_DIR"
+codesign "${SIGN_ARGS[@]}" "$APP_DIR"
 codesign --verify --deep --strict "$APP_DIR"
 spctl --assess --type execute --verbose=4 "$APP_DIR" || true
 

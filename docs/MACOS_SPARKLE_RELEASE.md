@@ -26,10 +26,13 @@ Windows release packaging remains in the same tag workflow.
 
 ## Required repository secrets
 
-Set these repository secrets before pushing a release tag:
+Required now:
 
 - `SPARKLE_PRIVATE_KEY` — Sparkle EdDSA private key (base64 secret).
 - `SPARKLE_PUBLIC_KEY` — matching public key (value used in `SUPublicEDKey`).
+
+Optional (enable trusted distribution without Gatekeeper warnings):
+
 - `MACOS_DEVELOPER_ID_APP_CERT_P12_BASE64` — base64-encoded `.p12` for `Developer ID Application`.
 - `MACOS_DEVELOPER_ID_APP_CERT_PASSWORD` — password for the `.p12`.
 - `MACOS_DEVELOPER_ID_APP_SIGNING_IDENTITY` — exact codesign identity string, e.g. `Developer ID Application: Your Name (TEAMID)`.
@@ -37,7 +40,7 @@ Set these repository secrets before pushing a release tag:
 - `MACOS_NOTARY_ISSUER_ID` — App Store Connect issuer ID.
 - `MACOS_NOTARY_API_KEY_P8_BASE64` — base64-encoded contents of `AuthKey_<KEY_ID>.p8`.
 
-If any secret is missing, macOS release job fails.
+If Developer ID/notary secrets are missing, workflow still builds and publishes macOS artifacts for internal testing, but those artifacts are not notarized and macOS will show Gatekeeper warnings.
 
 ## One-time key setup (local)
 

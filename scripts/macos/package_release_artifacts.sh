@@ -37,7 +37,11 @@ hdiutil create \
   "$DMG_PATH"
 rm -rf "$TMP_DMG_DIR"
 
-codesign --force --sign "$SIGN_IDENTITY" --timestamp "$DMG_PATH"
+if [[ "$SIGN_IDENTITY" == "-" ]]; then
+  codesign --force --sign - "$DMG_PATH"
+else
+  codesign --force --sign "$SIGN_IDENTITY" --timestamp "$DMG_PATH"
+fi
 codesign --verify --verbose=2 "$DMG_PATH"
 
 echo "ZIP_PATH=$ZIP_PATH"
