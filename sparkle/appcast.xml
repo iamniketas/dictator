@@ -3,13 +3,13 @@
     <channel>
         <title>Dictator</title>
         <item>
-            <title>0.4.1</title>
-            <pubDate>Sat, 07 Mar 2026 14:16:52 +0000</pubDate>
-            <sparkle:version>0.4.1</sparkle:version>
-            <sparkle:shortVersionString>0.4.1</sparkle:shortVersionString>
+            <title>0.4.2</title>
+            <pubDate>Sat, 07 Mar 2026 15:54:53 +0000</pubDate>
+            <sparkle:version>0.4.2</sparkle:version>
+            <sparkle:shortVersionString>0.4.2</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <enclosure url="https://github.com/iamniketas/dictator/releases/download/v0.4.1/Dictator-0.4.1-macOS.zip" length="3311050" type="application/octet-stream" sparkle:edSignature="mwjtHPVcfrBjJahgQfUwy8eLEJpYizUmv2GEGj/VRu0wk2OidDA1md3+uAN81VBsmE48PH7PIQgzcgyM9rBuCg=="/>
+            <enclosure url="https://github.com/iamniketas/dictator/releases/download/v0.4.2/Dictator-0.4.2-macOS.zip" length="3311208" type="application/octet-stream" sparkle:edSignature="88RZn7ZCUnijOFTS3Ynz0evGOdxjQ6BRg1MfylFw1WUy9kBvWacXCVLMGahMJYDiAFmSI1H0fkUVZgtGU0mzDQ=="/>
         </item>
     </channel>
 </rss>
