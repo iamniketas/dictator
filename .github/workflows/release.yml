@@ -229,7 +229,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          ASSETS_JSON="$(gh release view \"${GITHUB_REF_NAME}\" --repo \"${GITHUB_REPOSITORY}\" --json assets)"
+          ASSETS_JSON="$(gh release view "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --json assets)"
           echo "$ASSETS_JSON" | jq -e '.assets[] | select(.name | test("^DictatorMac-.*-macOS\\.zip$"))' >/dev/null
           echo "$ASSETS_JSON" | jq -e '.assets[] | select(.name | test("^DictatorMac-.*-macOS\\.dmg$"))' >/dev/null
           echo "$ASSETS_JSON" | jq -e '.assets[] | select(.name == "appcast.xml")' >/dev/null
