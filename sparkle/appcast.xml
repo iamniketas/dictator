@@ -1,15 +1,15 @@
 <?xml version="1.0" standalone="yes"?>
 <rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
     <channel>
-        <title>DictatorMac</title>
+        <title>Dictator</title>
         <item>
-            <title>0.4.0</title>
-            <pubDate>Sat, 07 Mar 2026 13:23:33 +0000</pubDate>
-            <sparkle:version>0.4.0</sparkle:version>
-            <sparkle:shortVersionString>0.4.0</sparkle:shortVersionString>
+            <title>0.4.1</title>
+            <pubDate>Sat, 07 Mar 2026 14:16:52 +0000</pubDate>
+            <sparkle:version>0.4.1</sparkle:version>
+            <sparkle:shortVersionString>0.4.1</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <enclosure url="https://github.com/iamniketas/dictator/releases/download/v0.4.0/DictatorMac-0.4.0-macOS.zip" length="2757872" type="application/octet-stream" sparkle:edSignature="sBKrIhw4DCH0GgQ/a3qYqLQ6Me0Ho3elav7a69Xqaa6wcl3UWQ/mZzdnyntVpA5rafFXBli7XEwtwfc/iMJ4Dw=="/>
+            <enclosure url="https://github.com/iamniketas/dictator/releases/download/v0.4.1/Dictator-0.4.1-macOS.zip" length="3311050" type="application/octet-stream" sparkle:edSignature="mwjtHPVcfrBjJahgQfUwy8eLEJpYizUmv2GEGj/VRu0wk2OidDA1md3+uAN81VBsmE48PH7PIQgzcgyM9rBuCg=="/>
         </item>
     </channel>
 </rss>
