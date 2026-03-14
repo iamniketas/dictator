@@ -570,7 +570,7 @@ impl ApplicationHandler<OverlayCommand> for OverlayApp {
                                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW,
                             );
                         } else {
-                            let _ = ShowWindow(hwnd, SW_HIDE);
+                            let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
                         }
                     }
                 }

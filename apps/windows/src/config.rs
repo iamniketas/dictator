@@ -23,6 +23,8 @@ pub struct Config {
     pub memory: MemoryConfig,
     #[serde(default)]
     pub runtime: RuntimeConfig,
+    #[serde(default)]
+    pub ui: UiConfig,
 }
 
 /// Memory management configuration
@@ -70,6 +72,27 @@ impl RuntimePreference {
 pub struct RuntimeConfig {
     #[serde(default)]
     pub preference: RuntimePreference,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UiConfig {
+    #[serde(default = "default_true")]
+    pub show_post_transcription_overlay: bool,
+    #[serde(default = "default_overlay_result_seconds")]
+    pub post_transcription_overlay_seconds: u32,
+}
+
+fn default_overlay_result_seconds() -> u32 {
+    3
+}
+
+impl Default for UiConfig {
+    fn default() -> Self {
+        Self {
+            show_post_transcription_overlay: default_true(),
+            post_transcription_overlay_seconds: default_overlay_result_seconds(),
+        }
+    }
 }
 
 impl Default for RuntimeConfig {
@@ -273,6 +296,7 @@ impl Default for Config {
             injection: InjectionConfig::default(),
             memory: MemoryConfig::default(),
             runtime: RuntimeConfig::default(),
+            ui: UiConfig::default(),
         }
     }
 }

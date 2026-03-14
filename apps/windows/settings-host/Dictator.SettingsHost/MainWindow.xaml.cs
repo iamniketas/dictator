@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Globalization;
+using System.Linq;
 using System.Management;
 using System.Net.Http;
 using System.Net.Http.Headers;
@@ -26,6 +27,7 @@ public sealed partial class MainWindow : Window
     private string _modelsDir;
     private string _audioHistoryDir;
     private string _transcriptsDir;
+    private readonly bool _startInOnboarding;
 
     private readonly ObservableCollection<CatalogModelItem> _catalogModels = new();
     private readonly List<CatalogModelItem> _catalogSource = CatalogModelItem.DefaultCatalog();
@@ -35,6 +37,8 @@ public sealed partial class MainWindow : Window
     private string RuntimeProfilesDir => Path.Combine(_modelsDir, "runtimes", "profiles");
 
     private bool _uiReady;
+    private bool _closeHintShown;
+    private bool _allowClose;
 
     public MainWindow()
     {
@@ -42,7 +46,7 @@ public sealed partial class MainWindow : Window
 
         SetCurrentProcessExplicitAppUserModelID("Dictator.SettingsHost");
 
-        (_configPath, _modelsDir, _, var historyRoot) = ParseArgs();
+        (_configPath, _modelsDir, _, var historyRoot, _startInOnboarding) = ParseArgs();
         _audioHistoryDir = Path.Combine(historyRoot, "audio");
         _transcriptsDir = Path.Combine(historyRoot, "transcripts");
         LoadStorageConfig();
@@ -50,15 +54,16 @@ public sealed partial class MainWindow : Window
         Title = "Dictator Settings";
         SetWindowSize(1120, 800);
         TrySetWindowIcon();
+        AttachCloseHint();
 
-        Nav.SelectedItem = Nav.MenuItems[0];
+        SelectNavByTag(_startInOnboarding ? "welcome" : "models");
         CatalogItems.ItemsSource = _catalogModels;
 
         RefreshAll();
         _uiReady = true;
     }
 
-    private static (string configPath, string modelsDir, string storePath, string historyDir) ParseArgs()
+    private static (string configPath, string modelsDir, string storePath, string historyDir, bool onboarding) ParseArgs()
     {
         var args = Environment.GetCommandLineArgs();
         string GetValue(string key, string fallback)
@@ -72,12 +77,53 @@ public sealed partial class MainWindow : Window
 
         var local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
         var docs = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+        var onboarding = args.Any(a => string.Equals(a, "--onboarding", StringComparison.OrdinalIgnoreCase));
         return (
             GetValue("--config", Path.Combine(local, "dictator", "config.toml")),
             GetValue("--models-dir", Path.Combine(local, "AudioModels")),
             GetValue("--store-path", Path.Combine(local, "AudioModels", "model_store.json")),
-            GetValue("--history-dir", Path.Combine(docs, "Dictator", "History"))
+            GetValue("--history-dir", Path.Combine(docs, "Dictator", "History")),
+            onboarding
         );
+    }
+
+    private void AttachCloseHint()
+    {
+        try
+        {
+            var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
+            var windowId = Microsoft.UI.Win32Interop.GetWindowIdFromWindow(hwnd);
+            var appWindow = AppWindow.GetFromWindowId(windowId);
+            appWindow.Closing += OnAppWindowClosing;
+        }
+        catch
+        {
+        }
+    }
+
+    private async void OnAppWindowClosing(AppWindow sender, AppWindowClosingEventArgs args)
+    {
+        if (_allowClose || _closeHintShown) return;
+
+        args.Cancel = true;
+        _closeHintShown = true;
+        try
+        {
+            var dialog = new ContentDialog
+            {
+                Title = "Dictator stays in tray",
+                Content = "Closing this window does not stop Dictator. To fully exit, right-click the tray icon and choose Exit.",
+                CloseButtonText = "Got it",
+                XamlRoot = Content.XamlRoot
+            };
+            await dialog.ShowAsync();
+        }
+        catch
+        {
+        }
+
+        _allowClose = true;
+        Close();
     }
 
     private void TrySetWindowIcon()
@@ -115,6 +161,18 @@ public sealed partial class MainWindow : Window
         RefreshHardwareDiagnostics();
 
         AboutText.Text = "Dictator Settings Host (WinUI 3). Changes are applied immediately.";
+    }
+
+    private void SelectNavByTag(string tag)
+    {
+        foreach (var item in Nav.MenuItems.OfType<NavigationViewItem>())
+        {
+            if (string.Equals(item.Tag as string, tag, StringComparison.OrdinalIgnoreCase))
+            {
+                Nav.SelectedItem = item;
+                break;
+            }
+        }
     }
 
     private void LoadStorageConfig()
@@ -205,6 +263,8 @@ public sealed partial class MainWindow : Window
         OllamaUrlBox.Text = GetTomlString("ollama", "url") ?? "http://localhost:11434";
         OllamaModelBox.Text = GetTomlString("ollama", "model") ?? "glm-4.7-flash";
         IdleMinutesBox.Value = GetTomlUInt("memory", "idle_unload_minutes") ?? 5;
+        PostOverlayToggle.IsOn = GetTomlBool("ui", "show_post_transcription_overlay") ?? true;
+        PostOverlaySecondsBox.Value = GetTomlUInt("ui", "post_transcription_overlay_seconds") ?? 3;
     }
 
     private void RefreshHardwareDiagnostics()
@@ -294,6 +354,7 @@ public sealed partial class MainWindow : Window
     {
         if (args.SelectedItem is not NavigationViewItem item || item.Tag is not string tag) return;
 
+        WelcomePanel.Visibility = tag == "welcome" ? Visibility.Visible : Visibility.Collapsed;
         ModelsPanel.Visibility = tag == "models" ? Visibility.Visible : Visibility.Collapsed;
         RuntimePanel.Visibility = tag == "runtime" ? Visibility.Visible : Visibility.Collapsed;
         DictationPanel.Visibility = tag == "dictation" ? Visibility.Visible : Visibility.Collapsed;
@@ -302,6 +363,7 @@ public sealed partial class MainWindow : Window
 
         PageTitle.Text = tag switch
         {
+            "welcome" => "Welcome",
             "runtime" => "Runtime & Device",
             "dictation" => "Dictation",
             "storage" => "Storage",
@@ -309,6 +371,10 @@ public sealed partial class MainWindow : Window
             _ => "Models",
         };
     }
+
+    private void OnGoToModelsClick(object sender, RoutedEventArgs e) => SelectNavByTag("models");
+    private void OnGoToRuntimeClick(object sender, RoutedEventArgs e) => SelectNavByTag("runtime");
+    private void OnGoToDictationClick(object sender, RoutedEventArgs e) => SelectNavByTag("dictation");
 
     private void OnCatalogCardTapped(object sender, TappedRoutedEventArgs e)
     {
@@ -906,6 +972,19 @@ public sealed partial class MainWindow : Window
     {
         if (!_uiReady) return;
         UpsertTomlValue("ollama", "enabled", LlmToggle.IsOn ? "true" : "false");
+    }
+
+    private void OnPostOverlayToggled(object sender, RoutedEventArgs e)
+    {
+        if (!_uiReady) return;
+        UpsertTomlValue("ui", "show_post_transcription_overlay", PostOverlayToggle.IsOn ? "true" : "false");
+    }
+
+    private void OnPostOverlaySecondsChanged(NumberBox sender, NumberBoxValueChangedEventArgs args)
+    {
+        if (!_uiReady) return;
+        var value = (uint)Math.Clamp((int)Math.Round(sender.Value), 1, 15);
+        UpsertTomlValue("ui", "post_transcription_overlay_seconds", value.ToString(CultureInfo.InvariantCulture));
     }
 
     private void OnConfigFieldLostFocus(object sender, RoutedEventArgs e)

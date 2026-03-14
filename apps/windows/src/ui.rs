@@ -39,6 +39,7 @@ const ID_DOWNLOAD_START: u16 = 1300; // Start of download model IDs (1300-1399)
 const ID_DOWNLOAD_END: u16 = 1399;
 const ID_SETTINGS: u16 = 1010;
 const ID_INSTALL_UPDATE: u16 = 1011;
+const ID_WELCOME: u16 = 1012;
 
 static SHOULD_EXIT: AtomicBool = AtomicBool::new(false);
 static STREAMING_ENABLED: AtomicBool = AtomicBool::new(false);
@@ -66,6 +67,7 @@ static DOWNLOAD_LIST_CALLBACK: std::sync::Mutex<Option<Box<dyn Fn() -> Vec<Downl
 
 // Settings window callback
 static SETTINGS_CALLBACK: std::sync::Mutex<Option<Box<dyn Fn() + Send + 'static>>> = std::sync::Mutex::new(None);
+static SETTINGS_WELCOME_CALLBACK: std::sync::Mutex<Option<Box<dyn Fn() + Send + 'static>>> = std::sync::Mutex::new(None);
 
 /// Entry for history menu
 #[derive(Debug, Clone)]
@@ -380,6 +382,16 @@ unsafe extern "system" fn window_proc(
     }
 }
 
+/// Set callback for opening settings on Welcome page.
+pub fn set_settings_welcome_callback<F>(callback: F)
+where
+    F: Fn() + Send + 'static,
+{
+    if let Ok(mut cb) = SETTINGS_WELCOME_CALLBACK.lock() {
+        *cb = Some(Box::new(callback));
+    }
+}
+
 unsafe fn window_proc_impl(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     match msg {
         WM_TRAYICON => {
@@ -451,6 +463,13 @@ unsafe fn window_proc_impl(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
             } else if cmd == ID_SETTINGS {
                 eprintln!("[TRAY] Opening settings");
                 if let Ok(cb) = SETTINGS_CALLBACK.lock() {
+                    if let Some(ref callback) = *cb {
+                        callback();
+                    }
+                }
+            } else if cmd == ID_WELCOME {
+                eprintln!("[TRAY] Opening welcome");
+                if let Ok(cb) = SETTINGS_WELCOME_CALLBACK.lock() {
                     if let Some(ref callback) = *cb {
                         callback();
                     }
@@ -554,6 +573,9 @@ unsafe fn show_context_menu(hwnd: HWND) {
 
         // ── Actions ──────────────────────────────────────────────────────────
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
+        let _ = AppendMenuW(menu, MF_GRAYED | MF_STRING, 0, w!("Quick Actions"));
+        let _ = AppendMenuW(menu, MF_STRING, ID_SETTINGS as usize, w!("Open Settings"));
+        let _ = AppendMenuW(menu, MF_STRING, ID_WELCOME as usize, w!("Open Welcome Guide"));
         let _ = AppendMenuW(
             menu,
             MF_STRING,
@@ -561,7 +583,7 @@ unsafe fn show_context_menu(hwnd: HWND) {
             w!("Open Recordings Folder"),
         );
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
-        let _ = AppendMenuW(menu, MF_STRING, ID_SETTINGS as usize, w!("Settings..."));
+        let _ = AppendMenuW(menu, MF_STRING, ID_ABOUT as usize, w!("About Dictator"));
         let _ = AppendMenuW(menu, MF_STRING, ID_EXIT as usize, w!("Exit"));
 
         let mut pt = Default::default();

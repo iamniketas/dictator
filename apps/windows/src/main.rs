@@ -168,7 +168,7 @@ fn format_transcribing_status(
 ) -> String {
     let eta = (expected_secs - elapsed_secs).max(0.0);
     format!(
-        "Transcribing {} {:.0}%\nElapsed: {:.1}s | ETA: ~{:.1}s",
+        "Transcribing {} {:.0}% | elapsed {:.1}s | ETA ~{:.1}s",
         spinner,
         progress * 100.0,
         elapsed_secs,
@@ -300,6 +300,7 @@ fn try_open_winui_settings_host(
     models_dir: &std::path::Path,
     store_path: &std::path::Path,
     history_dir: &std::path::Path,
+    onboarding: bool,
 ) -> bool {
     if let Ok(mut slot) = SETTINGS_HOST_CHILD.lock() {
         if let Some(child) = slot.as_mut() {
@@ -392,6 +393,9 @@ fn try_open_winui_settings_host(
         .arg(store_path)
         .arg("--history-dir")
         .arg(history_dir);
+    if onboarding {
+        cmd.arg("--onboarding");
+    }
 
     match cmd.spawn() {
         Ok(child) => {
@@ -410,6 +414,26 @@ fn try_open_winui_settings_host(
             false
         }
     }
+}
+
+fn onboarding_marker_path() -> std::path::PathBuf {
+    dirs::data_local_dir()
+        .unwrap_or_else(std::env::temp_dir)
+        .join("dictator")
+        .join("state")
+        .join("onboarding_completed.marker")
+}
+
+fn is_first_run() -> bool {
+    !onboarding_marker_path().exists()
+}
+
+fn mark_onboarding_completed() {
+    let marker = onboarding_marker_path();
+    if let Some(parent) = marker.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(marker, b"ok");
 }
 fn scan_available_models(config: &Config, current_path: &std::path::Path) -> Vec<ModelMenuItem> {
     let Some(models_dir) = config.whisper.effective_models_dir() else {
@@ -885,6 +909,10 @@ fn main() -> Result<()> {
     }
 
     info!("Dictator starting...");
+    info!(
+        "[BUILD] CUDA support: {}",
+        if cfg!(feature = "cuda") { "enabled" } else { "disabled" }
+    );
     if file_logging_enabled {
         info!("Log file location: {:?}", log_file);
     } else {
@@ -1106,6 +1134,7 @@ fn main() -> Result<()> {
                 &models_dir_for_settings,
                 &model_store::default_store_path(),
                 &history_dir,
+                false,
             ) {
                 return;
             }
@@ -1518,6 +1547,40 @@ fn main() -> Result<()> {
         });
     }
 
+    {
+        let config_path_for_welcome = Config::config_path();
+        let models_dir_for_welcome = models_dir.clone();
+        ui::set_settings_welcome_callback(move || {
+            let history_dir = dirs::document_dir()
+                .unwrap_or_else(std::env::temp_dir)
+                .join("Dictator")
+                .join("History");
+            let _ = try_open_winui_settings_host(
+                &config_path_for_welcome,
+                &models_dir_for_welcome,
+                &model_store::default_store_path(),
+                &history_dir,
+                true,
+            );
+        });
+    }
+
+    if is_first_run() {
+        let history_dir = dirs::document_dir()
+            .unwrap_or_else(std::env::temp_dir)
+            .join("Dictator")
+            .join("History");
+        if try_open_winui_settings_host(
+            &Config::config_path(),
+            &models_dir,
+            &model_store::default_store_path(),
+            &history_dir,
+            true,
+        ) {
+            mark_onboarding_completed();
+        }
+    }
+
     // Callback to open config file in default editor
     ui::set_open_config_callback(|| {
         let config_path = Config::config_path();
@@ -1761,6 +1824,9 @@ fn main() -> Result<()> {
                 ui::set_streaming_enabled(live_cfg.streaming.enabled);
                 ui::set_streaming_chunk_seconds(live_cfg.streaming.poll_interval);
                 ui::set_ollama_enabled(live_cfg.ollama.enabled);
+                if let Ok(mut pref_guard) = runtime_preference_state.write() {
+                    *pref_guard = live_cfg.runtime.preference.clone();
+                }
                 let live_model_path = live_cfg.whisper.model_path;
                 if let Ok(mut active_guard) = active_model_path_clone.write() {
                     *active_guard = live_model_path.clone();
@@ -1799,9 +1865,12 @@ fn main() -> Result<()> {
                                 }
                             }
                             if let Ok(live_cfg) = Config::load() {
-                            ui::set_streaming_enabled(live_cfg.streaming.enabled);
-                            ui::set_streaming_chunk_seconds(live_cfg.streaming.poll_interval);
-                        }
+                                ui::set_streaming_enabled(live_cfg.streaming.enabled);
+                                ui::set_streaming_chunk_seconds(live_cfg.streaming.poll_interval);
+                                if let Ok(mut pref_guard) = runtime_preference_state.write() {
+                                    *pref_guard = live_cfg.runtime.preference.clone();
+                                }
+                            }
                         let streaming_enabled = ui::is_streaming_enabled();
                         let chunk_seconds = ui::streaming_chunk_seconds();
                             let mut status = format_recording_status(
@@ -1926,6 +1995,9 @@ fn main() -> Result<()> {
                         if let Ok(live_cfg) = Config::load() {
                             ui::set_streaming_enabled(live_cfg.streaming.enabled);
                             ui::set_streaming_chunk_seconds(live_cfg.streaming.poll_interval);
+                            if let Ok(mut pref_guard) = runtime_preference_state.write() {
+                                *pref_guard = live_cfg.runtime.preference.clone();
+                            }
                         }
                         let streaming_enabled = ui::is_streaming_enabled();
                         let chunk_seconds = ui::streaming_chunk_seconds();
@@ -2033,6 +2105,8 @@ fn main() -> Result<()> {
                     }
 
                     overlay_clone.set_recording(false);
+                    overlay_clone.update_status_text("Processing audio...");
+                    overlay_clone.update_body_text("Preparing transcription task");
 
                     // CRITICAL: Stop streaming FIRST while recording is still active
                     // This allows streaming to read the final buffer before it's cleared
@@ -2176,12 +2250,20 @@ fn main() -> Result<()> {
                         let transcribe_started = Instant::now();
                         let spinner_frames = ["|", "/", "-", "\\"];
                         let mut spinner_index = 0usize;
+                        let hard_timeout_secs = (expected_secs * 12.0).clamp(180.0, 1800.0);
 
                         let transcribed = loop {
                             match transcribe_rx.recv_timeout(Duration::from_millis(250)) {
                                 Ok(result) => break result,
                                 Err(mpsc::RecvTimeoutError::Timeout) => {
                                     let elapsed_secs = transcribe_started.elapsed().as_secs_f32();
+                                    if elapsed_secs >= hard_timeout_secs {
+                                        break Err(anyhow::anyhow!(
+                                            "Transcription timeout after {:.1}s (limit {:.0}s)",
+                                            elapsed_secs,
+                                            hard_timeout_secs
+                                        ));
+                                    }
                                     let progress = (elapsed_secs / expected_secs).min(0.99);
                                     let status = format_transcribing_status(
                                         spinner_frames[spinner_index % spinner_frames.len()],
@@ -2486,16 +2568,32 @@ fn main() -> Result<()> {
                         std::thread::sleep(std::time::Duration::from_millis(100));
                     }
 
-                    // Show overlay with final text
-                    overlay_clone.show(&final_text);
+                    // Optional post-transcription overlay summary (configured in [ui] settings).
+                    if config_clone.ui.show_post_transcription_overlay {
+                        let preview = final_text
+                            .split_whitespace()
+                            .take(16)
+                            .collect::<Vec<_>>()
+                            .join(" ");
+                        overlay_clone.show(&format!(
+                            "Inserted: {} words | {} chars\n{}{}",
+                            final_text.split_whitespace().count(),
+                            final_text.chars().count(),
+                            preview,
+                            if final_text.split_whitespace().count() > 16 { "..." } else { "" }
+                        ));
+                    }
 
                     // Inject text into focused application
                     if let Err(e) = input::inject_text(&final_text, &config_clone.injection.method) {
                         error!("Failed to inject text: {}", e);
                     }
 
-                    // Hide overlay after delay
-                    std::thread::sleep(std::time::Duration::from_secs(2));
+                    // Hide overlay after configured confirmation period.
+                    if config_clone.ui.show_post_transcription_overlay {
+                        let secs = config_clone.ui.post_transcription_overlay_seconds.clamp(1, 15) as u64;
+                        std::thread::sleep(std::time::Duration::from_secs(secs));
+                    }
                     overlay_clone.hide();
 
                     // Update last activity time for idle unload timer

@@ -15,6 +15,7 @@
                         OpenPaneLength="220"
                         SelectionChanged="OnNavChanged">
             <NavigationView.MenuItems>
+                <NavigationViewItem Content="Welcome" Tag="welcome"><NavigationViewItem.Icon><FontIcon Glyph="&#xE946;" /></NavigationViewItem.Icon></NavigationViewItem>
                 <NavigationViewItem Content="Models" Tag="models"><NavigationViewItem.Icon><FontIcon Glyph="&#xE8F1;" /></NavigationViewItem.Icon></NavigationViewItem>
                 <NavigationViewItem Content="Runtime &amp; Device" Tag="runtime"><NavigationViewItem.Icon><FontIcon Glyph="&#xE9D9;" /></NavigationViewItem.Icon></NavigationViewItem>
                 <NavigationViewItem Content="Dictation" Tag="dictation"><NavigationViewItem.Icon><FontIcon Glyph="&#xE720;" /></NavigationViewItem.Icon></NavigationViewItem>
@@ -25,6 +26,52 @@
             <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="24,18,24,24">
                 <StackPanel Spacing="18">
                     <TextBlock x:Name="PageTitle" FontSize="28" FontWeight="SemiBold" Text="Models" />
+
+                    <StackPanel x:Name="WelcomePanel" Spacing="14" Visibility="Collapsed">
+                        <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="12" Padding="16">
+                            <StackPanel Spacing="14">
+                                <TextBlock Text="Welcome to Dictator" FontSize="24" FontWeight="SemiBold" />
+                                <TextBlock Text="Local voice dictation for desktop apps. Press hotkey, speak, release, text is inserted into active field." TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+
+                                <Grid ColumnSpacing="10">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <FontIcon Glyph="&#xE70F;" FontSize="18" />
+                                    <TextBlock Grid.Column="1" Text="1) Open Models, download one model and activate it." TextWrapping="Wrap" />
+                                </Grid>
+
+                                <Grid ColumnSpacing="10">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <FontIcon Glyph="&#xE765;" FontSize="18" />
+                                    <TextBlock Grid.Column="1" Text="2) Open Runtime &amp; Device and keep Auto mode (recommended)." TextWrapping="Wrap" />
+                                </Grid>
+
+                                <Grid ColumnSpacing="10">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <FontIcon Glyph="&#xE720;" FontSize="18" />
+                                    <TextBlock Grid.Column="1" Text="3) Press Right Ctrl to start/stop dictation and test insertion in any text field." TextWrapping="Wrap" />
+                                </Grid>
+
+                                <Border Background="{ThemeResource AccentFillColorSecondaryBrush}" CornerRadius="10" Padding="10">
+                                    <TextBlock Text="Tip: closing this window does not stop Dictator. Use tray icon -> Exit to fully close app." TextWrapping="Wrap" />
+                                </Border>
+
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <Button Content="Open Models" Click="OnGoToModelsClick" />
+                                    <Button Content="Open Runtime" Click="OnGoToRuntimeClick" />
+                                    <Button Content="Open Dictation" Click="OnGoToDictationClick" />
+                                </StackPanel>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
 
                     <StackPanel x:Name="ModelsPanel" Spacing="14">
                         <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="12" Padding="16">
@@ -135,6 +182,7 @@
                                 <TextBlock Text="Transcription Mode" FontSize="16" FontWeight="SemiBold" />
                                 <ToggleSwitch x:Name="StreamingToggle" Header="Enable streaming transcription" Toggled="OnStreamingToggled" />
                                 <NumberBox x:Name="ChunkSecondsBox" Header="Streaming chunk interval (seconds)" Minimum="3" Maximum="60" ValueChanged="OnChunkValueChanged" />
+                                <TextBlock Text="Hotkey: Right Ctrl (hold/tap behavior managed by app runtime)." Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                             </StackPanel>
                         </Border>
 
@@ -156,6 +204,14 @@
                                 <TextBox x:Name="OllamaUrlBox" Header="Ollama URL" LostFocus="OnConfigFieldLostFocus" />
                                 <TextBox x:Name="OllamaModelBox" Header="Ollama model" LostFocus="OnConfigFieldLostFocus" />
                                 <NumberBox x:Name="IdleMinutesBox" Header="Idle unload (minutes)" Minimum="1" Maximum="240" ValueChanged="OnIdleValueChanged" />
+                            </StackPanel>
+                        </Border>
+
+                        <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="12" Padding="16">
+                            <StackPanel Spacing="12">
+                                <TextBlock Text="Overlay Feedback" FontSize="16" FontWeight="SemiBold" />
+                                <ToggleSwitch x:Name="PostOverlayToggle" Header="Show post-transcription summary overlay" Toggled="OnPostOverlayToggled" />
+                                <NumberBox x:Name="PostOverlaySecondsBox" Header="Summary overlay duration (seconds)" Minimum="1" Maximum="15" ValueChanged="OnPostOverlaySecondsChanged" />
                             </StackPanel>
                         </Border>
                     </StackPanel>
