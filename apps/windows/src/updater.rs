@@ -12,8 +12,7 @@ use velopack::{UpdateCheck, UpdateManager, VelopackApp};
 
 /// GitHub Releases URL where velopack packages are hosted.
 /// The updater will fetch `{URL}/releases.stable.json` for the feed.
-const GITHUB_RELEASES_URL: &str =
-    "https://github.com/iamniketas/dictator/releases/latest/download";
+const GITHUB_RELEASES_URL: &str = "https://github.com/iamniketas/dictator/releases/latest/download";
 
 /// **Must be called at the very beginning of `main()`**, before anything else.
 ///

@@ -45,9 +45,12 @@ impl HistoryManager {
     pub fn new(retention_days: u32) -> Result<Self> {
         let base_dir = Self::get_recordings_dir()?;
         fs::create_dir_all(&base_dir)?;
-        
-        info!("[HISTORY] Initialized at {:?}, retention: {} days", base_dir, retention_days);
-        
+
+        info!(
+            "[HISTORY] Initialized at {:?}, retention: {} days",
+            base_dir, retention_days
+        );
+
         Ok(Self {
             base_dir,
             retention_days,
@@ -64,7 +67,7 @@ impl HistoryManager {
                 return Ok(recordings_dir);
             }
         }
-        
+
         // Fallback to data_dir
         let data_dir = dirs::data_dir()
             .unwrap_or_else(std::env::temp_dir)
@@ -108,15 +111,26 @@ impl HistoryManager {
 
         // Save audio as WAV
         self.save_wav(audio_data, &audio_path)?;
-        info!("[HISTORY] Saved audio: {:?} ({:.1}s)", audio_path, duration_secs);
+        info!(
+            "[HISTORY] Saved audio: {:?} ({:.1}s)",
+            audio_path, duration_secs
+        );
 
         // Save text
         let mut text_file = fs::File::create(&text_path)?;
         text_file.write_all(text.as_bytes())?;
-        info!("[HISTORY] Saved text: {:?} ({} chars)", text_path, text.len());
+        info!(
+            "[HISTORY] Saved text: {:?} ({} chars)",
+            text_path,
+            text.len()
+        );
 
         // Save metadata
-        let text_preview = text.chars().take(100).collect::<String>().replace('\n', " ");
+        let text_preview = text
+            .chars()
+            .take(100)
+            .collect::<String>()
+            .replace('\n', " ");
         let metadata = RecordingMetadata {
             timestamp: id.parse().unwrap_or(0),
             datetime: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
@@ -153,13 +167,13 @@ impl HistoryManager {
         };
 
         let mut writer = hound::WavWriter::create(path, spec)?;
-        
+
         for &sample in audio_data {
             // Convert f32 [-1.0, 1.0] to i16
             let sample_i16 = (sample.clamp(-1.0, 1.0) * 32767.0) as i16;
             writer.write_sample(sample_i16)?;
         }
-        
+
         writer.finalize()?;
         Ok(())
     }
@@ -190,7 +204,12 @@ impl HistoryManager {
 
             let mut day_recordings: Vec<Recording> = entries
                 .filter_map(|e| e.ok())
-                .filter(|e| e.path().extension().map(|ext| ext == "json").unwrap_or(false))
+                .filter(|e| {
+                    e.path()
+                        .extension()
+                        .map(|ext| ext == "json")
+                        .unwrap_or(false)
+                })
                 .filter_map(|e| self.load_recording_from_meta(&e.path()))
                 .collect();
 
@@ -237,7 +256,11 @@ impl HistoryManager {
         let text = self.read_text(recording)?;
         clipboard_win::set_clipboard_string(&text)
             .map_err(|e| anyhow::anyhow!("Failed to copy to clipboard: {:?}", e))?;
-        info!("[HISTORY] Copied recording {} to clipboard ({} chars)", recording.id, text.len());
+        info!(
+            "[HISTORY] Copied recording {} to clipboard ({} chars)",
+            recording.id,
+            text.len()
+        );
         Ok(())
     }
 
@@ -303,7 +326,10 @@ pub struct HistoryMenuEntry {
 }
 
 /// Build menu entries for recent recordings
-pub fn build_history_menu_entries(recordings: &[Recording], start_id: u16) -> Vec<HistoryMenuEntry> {
+pub fn build_history_menu_entries(
+    recordings: &[Recording],
+    start_id: u16,
+) -> Vec<HistoryMenuEntry> {
     recordings
         .iter()
         .enumerate()

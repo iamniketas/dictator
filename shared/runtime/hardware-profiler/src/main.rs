@@ -1,8 +1,9 @@
-﻿use hardware_profiler::detect_hardware_profile;
+use hardware_profiler::detect_hardware_profile;
 
 fn main() {
     let pretty = std::env::args().any(|a| a == "--pretty");
-    let source_app = std::env::var("HARDWARE_PROFILE_SOURCE").unwrap_or_else(|_| String::from("unknown"));
+    let source_app =
+        std::env::var("HARDWARE_PROFILE_SOURCE").unwrap_or_else(|_| String::from("unknown"));
 
     let profile = detect_hardware_profile(&source_app);
     let json = if pretty {

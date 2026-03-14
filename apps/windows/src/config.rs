@@ -338,7 +338,7 @@ impl Config {
                         let _ = fs::write(&config_path, migrated);
                     }
                     Ok(config)
-                },
+                }
                 Err(primary_err) => {
                     // Legacy compatibility: old builds persisted this backend name.
                     let repaired = content.replace("embedded_whisper_rs", "embedded");
@@ -437,8 +437,3 @@ model = "glm-4.7-flash"
         assert_eq!(dir, Some(PathBuf::from("C:\\models\\shared")));
     }
 }
-
-
-
-
-

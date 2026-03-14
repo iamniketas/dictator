@@ -1,0 +1,7 @@
+Model:           NVIDIA GeForce RTX 4090
+IRQ:             75
+GPU UUID:        GPU-12345678-1234-1234-1234-123456789abc
+
+Model:           NVIDIA RTX A4000
+IRQ:             76
+GPU UUID:        GPU-abcdefab-cdef-abcd-efab-cdefabcdefab

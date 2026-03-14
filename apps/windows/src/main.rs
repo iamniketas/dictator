@@ -17,19 +17,21 @@ use dictator::history::HistoryManager;
 use dictator::input::{self, HotkeyEvent};
 use dictator::llm::OllamaClient;
 use dictator::model_downloader;
-use model_store::{self, InstalledModel as StoreInstalledModel, InstalledRuntime as StoreInstalledRuntime};
 use dictator::overlay_win32::{OverlayConfig, OverlayWindow};
 use dictator::streaming::{StreamingEvent, StreamingTranscriber};
 use dictator::transcribe;
 use dictator::ui;
-use dictator::updater;
 use dictator::ui::{DownloadModelItem, ModelMenuItem};
+use dictator::updater;
 use dictator::whisper_engine::{self, SharedEngine};
 use dictator::whisper_server::WhisperServerManager;
+use model_store::{
+    self, InstalledModel as StoreInstalledModel, InstalledRuntime as StoreInstalledRuntime,
+};
 use windows::Win32::Foundation::CloseHandle;
 use windows::Win32::System::Threading::{
-    CreateEventW, CreateMutexW, OpenEventW, SetEvent, WaitForMultipleObjects,
-    SYNCHRONIZATION_ACCESS_RIGHTS,
+    CreateEventW, CreateMutexW, OpenEventW, SYNCHRONIZATION_ACCESS_RIGHTS, SetEvent,
+    WaitForMultipleObjects,
 };
 
 /// RAII guard that holds the single-instance named mutex.
@@ -38,7 +40,9 @@ struct SingleInstanceGuard(windows::Win32::Foundation::HANDLE);
 
 impl Drop for SingleInstanceGuard {
     fn drop(&mut self) {
-        unsafe { let _ = CloseHandle(self.0); }
+        unsafe {
+            let _ = CloseHandle(self.0);
+        }
     }
 }
 
@@ -48,7 +52,11 @@ fn try_signal_remote(event_name: windows::core::PCWSTR) -> bool {
     // EVENT_MODIFY_STATE = 0x0002
     unsafe {
         // EVENT_MODIFY_STATE = 0x0002
-        match OpenEventW(SYNCHRONIZATION_ACCESS_RIGHTS(0x0002), windows::Win32::Foundation::BOOL(0), event_name) {
+        match OpenEventW(
+            SYNCHRONIZATION_ACCESS_RIGHTS(0x0002),
+            windows::Win32::Foundation::BOOL(0),
+            event_name,
+        ) {
             Ok(handle) => {
                 let _ = SetEvent(handle);
                 let _ = CloseHandle(handle);
@@ -64,8 +72,8 @@ fn try_signal_remote(event_name: windows::core::PCWSTR) -> bool {
 /// - `DictatorStopEvent`  Р Р†Р вЂљРІР‚Сњ signals RecordStop   (used by --stop)
 fn start_ipc_listener(tx: std::sync::mpsc::Sender<dictator::input::HotkeyEvent>) {
     use dictator::input::HotkeyEvent;
-    use windows::core::w;
     use windows::Win32::Foundation::BOOL;
+    use windows::core::w;
 
     thread::spawn(move || unsafe {
         let Ok(toggle_ev) = CreateEventW(None, BOOL(0), BOOL(0), w!("DictatorToggleEvent")) else {
@@ -110,8 +118,10 @@ fn start_ipc_listener(tx: std::sync::mpsc::Sender<dictator::input::HotkeyEvent>)
 /// Try to acquire the single-instance mutex.
 /// Returns `None` (and shows a message box) if another instance is already running.
 fn acquire_single_instance() -> Option<SingleInstanceGuard> {
-    use windows::Win32::Foundation::{GetLastError, ERROR_ALREADY_EXISTS, BOOL};
-    use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_OK, MB_ICONINFORMATION, HWND_DESKTOP};
+    use windows::Win32::Foundation::{BOOL, ERROR_ALREADY_EXISTS, GetLastError};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        HWND_DESKTOP, MB_ICONINFORMATION, MB_OK, MessageBoxW,
+    };
     use windows::core::w;
 
     unsafe {
@@ -260,6 +270,116 @@ fn model_dir_size_label(path: &std::path::Path) -> String {
     file_size_label_bytes(total)
 }
 
+fn dir_size_bytes(path: &std::path::Path) -> Option<u64> {
+    if !path.exists() {
+        return None;
+    }
+    if path.is_file() {
+        return std::fs::metadata(path).ok().map(|m| m.len());
+    }
+    let mut total = 0u64;
+    let mut stack = vec![path.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(rd) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in rd.flatten() {
+            let p = entry.path();
+            if p.is_dir() {
+                stack.push(p);
+            } else if p.is_file() {
+                if let Ok(meta) = std::fs::metadata(&p) {
+                    total = total.saturating_add(meta.len());
+                }
+            }
+        }
+    }
+    Some(total)
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+struct RuntimeProfileMarker {
+    #[serde(rename = "LocalModelPath")]
+    local_model_path: Option<String>,
+}
+
+fn normalize_updated_by(updated_by: &str) -> String {
+    match updated_by {
+        "dictator" | "contora" | "manual" | "unknown" => updated_by.to_string(),
+        _ => String::from("dictator"),
+    }
+}
+
+fn discover_server_runtime_models(
+    models_dir: &std::path::Path,
+) -> Vec<(String, std::path::PathBuf)> {
+    let mut result: Vec<(String, std::path::PathBuf)> = Vec::new();
+    let runtime_models_root = models_dir.join("runtime-models");
+    if runtime_models_root.exists() {
+        let Ok(entries) = std::fs::read_dir(&runtime_models_root) else {
+            return result;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let Some(model_id) = path
+                .file_name()
+                .and_then(|v| v.to_str())
+                .map(|s| s.to_string())
+            else {
+                continue;
+            };
+            let has_any_files = std::fs::read_dir(&path)
+                .ok()
+                .map(|rd| rd.flatten().next().is_some())
+                .unwrap_or(false);
+            if has_any_files {
+                result.push((model_id, path));
+            }
+        }
+    }
+
+    let profile_root = models_dir.join("runtimes").join("profiles");
+    if profile_root.exists() {
+        let Ok(entries) = std::fs::read_dir(&profile_root) else {
+            return result;
+        };
+        for entry in entries.flatten() {
+            let marker_path = entry.path();
+            if !marker_path
+                .extension()
+                .and_then(|v| v.to_str())
+                .map(|s| s.eq_ignore_ascii_case("json"))
+                .unwrap_or(false)
+            {
+                continue;
+            }
+            let Some(model_id) = marker_path
+                .file_stem()
+                .and_then(|v| v.to_str())
+                .map(|s| s.to_string())
+            else {
+                continue;
+            };
+            let local_path = std::fs::read_to_string(&marker_path)
+                .ok()
+                .and_then(|raw| serde_json::from_str::<RuntimeProfileMarker>(&raw).ok())
+                .and_then(|m| m.local_model_path)
+                .map(std::path::PathBuf::from)
+                .filter(|p| p.exists())
+                .unwrap_or_else(|| runtime_models_root.join(&model_id));
+            if local_path.exists() {
+                result.push((model_id, local_path));
+            }
+        }
+    }
+
+    result.sort_by(|a, b| a.0.cmp(&b.0));
+    result.dedup_by(|a, b| a.0.eq_ignore_ascii_case(&b.0));
+    result
+}
 
 fn runtime_prefers_gpu(pref: &RuntimePreference) -> bool {
     !matches!(pref, RuntimePreference::ForceCpu)
@@ -312,7 +432,10 @@ fn try_open_winui_settings_host(
                     return true;
                 }
                 Err(e) => {
-                    warn!("[SETTINGS] Failed to check existing WinUI host process: {}", e);
+                    warn!(
+                        "[SETTINGS] Failed to check existing WinUI host process: {}",
+                        e
+                    );
                     *slot = None;
                 }
             }
@@ -456,8 +579,7 @@ fn scan_available_models(config: &Config, current_path: &std::path::Path) -> Vec
             let path = e.path();
             if is_embedded {
                 // Embedded: GGML .bin files
-                path.is_file()
-                    && path.extension().map(|ext| ext == "bin").unwrap_or(false)
+                path.is_file() && path.extension().map(|ext| ext == "bin").unwrap_or(false)
             } else {
                 // Server (legacy): CTranslate2 model directories
                 path.is_dir()
@@ -472,14 +594,17 @@ fn scan_available_models(config: &Config, current_path: &std::path::Path) -> Vec
             let size_label = if is_embedded {
                 // For .bin files, use the file size directly
                 std::fs::metadata(&path)
-                    .map(|m| {
-                        file_size_label_bytes(m.len())
-                    })
+                    .map(|m| file_size_label_bytes(m.len()))
                     .unwrap_or_default()
             } else {
                 model_dir_size_label(&path)
             };
-            ModelMenuItem { index: i, name, is_current, size_label }
+            ModelMenuItem {
+                index: i,
+                name,
+                is_current,
+                size_label,
+            }
         })
         .collect();
 
@@ -496,7 +621,11 @@ fn sync_shared_model_store(updated_by: &str, config: &Config, active_model_path:
     let mut store = match model_store::load_or_default_store(&store_path) {
         Ok(v) => v,
         Err(e) => {
-            warn!("[MODEL-STORE] failed to load store {}: {}", store_path.display(), e);
+            warn!(
+                "[MODEL-STORE] failed to load store {}: {}",
+                store_path.display(),
+                e
+            );
             return;
         }
     };
@@ -515,26 +644,70 @@ fn sync_shared_model_store(updated_by: &str, config: &Config, active_model_path:
             kind: String::from("whisper_rs"),
             version: None,
             entry_path: models_dir.display().to_string(),
-            disk_usage_bytes: None,
+            disk_usage_bytes: dir_size_bytes(&models_dir),
         },
     );
+    let server_runtime_id = String::from("server_python_asr");
+    let server_runtime_root = models_dir.join("runtimes").join("python-asr");
+    if server_runtime_root.exists() {
+        model_store::upsert_runtime(
+            &mut store,
+            StoreInstalledRuntime {
+                id: server_runtime_id.clone(),
+                display_name: String::from("Server Python ASR"),
+                kind: String::from("faster_whisper"),
+                version: None,
+                entry_path: server_runtime_root.display().to_string(),
+                disk_usage_bytes: dir_size_bytes(&server_runtime_root),
+            },
+        );
+    }
 
     let discovered = match model_store::discover_local_ggml_models(&models_dir) {
         Ok(v) => v,
         Err(e) => {
-            warn!("[MODEL-STORE] failed to scan models in {}: {}", models_dir.display(), e);
+            warn!(
+                "[MODEL-STORE] failed to scan models in {}: {}",
+                models_dir.display(),
+                e
+            );
             Vec::new()
         }
     };
+    let catalog = model_store::load_embedded_catalog().ok();
+    let mut by_filename: HashMap<String, model_store::CatalogModel> = HashMap::new();
+    if let Some(c) = &catalog {
+        for model in &c.models {
+            if let Some(filename) = &model.download_filename {
+                by_filename.insert(filename.to_ascii_lowercase(), model.clone());
+            }
+        }
+    }
 
-    store.installed_models.clear();
+    let managed_runtime_ids = [runtime_id.as_str(), server_runtime_id.as_str()];
+    store.installed_models.retain(|m| {
+        !managed_runtime_ids
+            .iter()
+            .any(|id| m.runtime_id.eq_ignore_ascii_case(id))
+    });
     for path in discovered {
-        let Some(file_name) = path.file_name().and_then(|v| v.to_str()) else { continue; };
-        let model_id = file_name.to_string();
-        let health = model_store::evaluate_model_health(
-            &models_dir,
-            &[model_id.clone()],
-        );
+        let Some(file_name) = path.file_name().and_then(|v| v.to_str()) else {
+            continue;
+        };
+        let catalog_entry = by_filename.get(&file_name.to_ascii_lowercase());
+        let model_id = catalog_entry
+            .map(|m| m.id.clone())
+            .unwrap_or_else(|| file_name.to_string());
+        let required_files = catalog_entry
+            .map(|m| {
+                if m.required_files.is_empty() {
+                    vec![file_name.to_string()]
+                } else {
+                    m.required_files.clone()
+                }
+            })
+            .unwrap_or_else(|| vec![file_name.to_string()]);
+        let health = model_store::evaluate_model_health(&models_dir, &required_files);
         model_store::upsert_model(
             &mut store,
             StoreInstalledModel {
@@ -544,22 +717,58 @@ fn sync_shared_model_store(updated_by: &str, config: &Config, active_model_path:
                 size_bytes: std::fs::metadata(&path).ok().map(|m| m.len()),
                 is_default: Some(path == active_model_path),
                 health,
-                required_files: Some(vec![file_name.to_string()]),
+                required_files: Some(required_files),
+                registered_at: None,
+            },
+        );
+    }
+
+    for (model_id, model_path) in discover_server_runtime_models(&models_dir) {
+        let health = if model_path.exists() {
+            String::from("ok")
+        } else {
+            String::from("missing_files")
+        };
+        let active_for_server = matches!(config.whisper.backend, WhisperBackend::Server)
+            && active_model_path == model_path;
+        model_store::upsert_model(
+            &mut store,
+            StoreInstalledModel {
+                id: model_id,
+                runtime_id: server_runtime_id.clone(),
+                directory_path: model_path.display().to_string(),
+                size_bytes: dir_size_bytes(&model_path),
+                is_default: Some(active_for_server),
+                health,
+                required_files: None,
                 registered_at: None,
             },
         );
     }
 
     store.models_root_path = models_dir.display().to_string();
-    store.active_runtime_id = Some(runtime_id);
+    store.active_runtime_id = match config.whisper.backend {
+        WhisperBackend::Embedded => Some(runtime_id),
+        WhisperBackend::Server => Some(server_runtime_id),
+    };
     store.active_model_id = active_model_path
         .file_name()
         .and_then(|v| v.to_str())
-        .map(|s| s.to_string());
-    store.updated_by = updated_by.to_string();
+        .map(|s| s.to_string())
+        .or_else(|| {
+            active_model_path
+                .to_str()
+                .and_then(|s| (!s.is_empty()).then_some(s.to_string()))
+        });
+    store.updated_by = normalize_updated_by(updated_by);
+    store.updated_at = Some(chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
 
     if let Err(e) = model_store::save_store_atomic(&store_path, &store) {
-        warn!("[MODEL-STORE] failed to save store {}: {}", store_path.display(), e);
+        warn!(
+            "[MODEL-STORE] failed to save store {}: {}",
+            store_path.display(),
+            e
+        );
     }
 }
 
@@ -649,7 +858,6 @@ fn log_policy_telemetry(
     info!("[POLICY_TELEMETRY] {}", event);
 }
 
-
 fn run_foundation_diagnostics(fix_store: bool, open_report: bool) -> Result<std::path::PathBuf> {
     let config = Config::load()?;
     let hardware_profile = hardware_profiler::detect_hardware_profile("dictator_doctor");
@@ -658,10 +866,15 @@ fn run_foundation_diagnostics(fix_store: bool, open_report: bool) -> Result<std:
         .effective_models_dir()
         .unwrap_or_else(model_downloader::default_models_dir);
 
-    let installed_model_paths = model_store::discover_local_ggml_models(&models_dir).unwrap_or_default();
+    let installed_model_paths =
+        model_store::discover_local_ggml_models(&models_dir).unwrap_or_default();
     let installed_model_filenames = installed_model_paths
         .iter()
-        .filter_map(|p| p.file_name().and_then(|n| n.to_str()).map(|s| s.to_string()))
+        .filter_map(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .map(|s| s.to_string())
+        })
         .collect::<Vec<_>>();
 
     let catalog_filenames = model_downloader::get_downloadable_models()
@@ -679,7 +892,13 @@ fn run_foundation_diagnostics(fix_store: bool, open_report: bool) -> Result<std:
                         .iter()
                         .any(|b| b.eq_ignore_ascii_case("server"))
                 })
-                .filter_map(|m| if m.download_filename.is_none() { Some(m.id) } else { None })
+                .filter_map(|m| {
+                    if m.download_filename.is_none() {
+                        Some(m.id)
+                    } else {
+                        None
+                    }
+                })
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
@@ -772,7 +991,9 @@ fn run_foundation_diagnostics(fix_store: bool, open_report: bool) -> Result<std:
     std::fs::write(&report_path, serde_json::to_string_pretty(&report)?)?;
 
     if open_report {
-        let _ = std::process::Command::new("notepad").arg(&report_path).spawn();
+        let _ = std::process::Command::new("notepad")
+            .arg(&report_path)
+            .spawn();
     }
 
     Ok(report_path)
@@ -790,10 +1011,8 @@ fn main() -> Result<()> {
     // Handle CLI remote-control args before single-instance check.
     // These signal a running instance and exit immediately.
     {
+        use windows::Win32::UI::WindowsAndMessaging::{MB_ICONINFORMATION, MB_OK, MessageBoxW};
         use windows::core::w;
-        use windows::Win32::UI::WindowsAndMessaging::{
-            MessageBoxW, MB_ICONINFORMATION, MB_OK,
-        };
         let args: Vec<String> = std::env::args().skip(1).collect();
         let run_foundation_check = args.iter().any(|a| a == "--foundation-check");
         let run_foundation_fix = args.iter().any(|a| a == "--foundation-fix");
@@ -910,7 +1129,11 @@ fn main() -> Result<()> {
     info!("Dictator starting...");
     info!(
         "[BUILD] CUDA support: {}",
-        if cfg!(feature = "cuda") { "enabled" } else { "disabled" }
+        if cfg!(feature = "cuda") {
+            "enabled"
+        } else {
+            "disabled"
+        }
     );
     if file_logging_enabled {
         info!("Log file location: {:?}", log_file);
@@ -932,7 +1155,11 @@ fn main() -> Result<()> {
     let installed_model_filenames = model_store::discover_local_ggml_models(&models_dir)
         .unwrap_or_default()
         .into_iter()
-        .filter_map(|p| p.file_name().and_then(|n| n.to_str()).map(|s| s.to_string()))
+        .filter_map(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .map(|s| s.to_string())
+        })
         .collect::<Vec<_>>();
 
     let catalog_filenames = model_downloader::get_downloadable_models()
@@ -950,7 +1177,13 @@ fn main() -> Result<()> {
                         .iter()
                         .any(|b| b.eq_ignore_ascii_case("server"))
                 })
-                .filter_map(|m| if m.download_filename.is_none() { Some(m.id) } else { None })
+                .filter_map(|m| {
+                    if m.download_filename.is_none() {
+                        Some(m.id)
+                    } else {
+                        None
+                    }
+                })
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
@@ -990,7 +1223,8 @@ fn main() -> Result<()> {
 
     let runtime_preference_state = Arc::new(RwLock::new(config.runtime.preference.clone()));
     let last_policy_stage = Arc::new(RwLock::new(String::from("startup")));
-    let policy_enable_server_fallback = Arc::new(RwLock::new(runtime_policy.enable_server_fallback));
+    let policy_enable_server_fallback =
+        Arc::new(RwLock::new(runtime_policy.enable_server_fallback));
     let policy_enable_cloud_fallback = Arc::new(RwLock::new(runtime_policy.enable_cloud_fallback));
 
     let policy_fallback_models = Arc::new(RwLock::new(
@@ -1024,7 +1258,10 @@ fn main() -> Result<()> {
     // Initialize streaming mode from config on startup.
     ui::set_streaming_enabled(config.streaming.enabled);
     ui::set_streaming_chunk_seconds(config.streaming.poll_interval);
-    info!("[MAIN] Initial streaming state: {}", ui::is_streaming_enabled());
+    info!(
+        "[MAIN] Initial streaming state: {}",
+        ui::is_streaming_enabled()
+    );
     info!(
         "[MAIN] Initial streaming chunk: {}s",
         ui::streaming_chunk_seconds()
@@ -1035,7 +1272,10 @@ fn main() -> Result<()> {
 
     // Log Ollama status
     if config.ollama.enabled {
-        info!("Ollama correction enabled ({}) Р Р†Р вЂљРІР‚Сњ togglable from tray", config.ollama.url);
+        info!(
+            "Ollama correction enabled ({}) Р Р†Р вЂљРІР‚Сњ togglable from tray",
+            config.ollama.url
+        );
     } else {
         info!("Ollama correction disabled (can be enabled from tray menu)");
     }
@@ -1056,7 +1296,10 @@ fn main() -> Result<()> {
 
     // Create history manager
     let history = Arc::new(HistoryManager::new(config.history.retention_days)?);
-    info!("[MAIN] History manager created, enabled: {}", config.history.enabled);
+    info!(
+        "[MAIN] History manager created, enabled: {}",
+        config.history.enabled
+    );
 
     // Set up history callbacks for tray menu
     let history_for_open = history.clone();
@@ -1123,12 +1366,14 @@ fn main() -> Result<()> {
             }
 
             unsafe {
-                use windows::core::w;
                 use windows::Win32::Foundation::HWND;
-                use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
+                use windows::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW};
+                use windows::core::w;
                 let _ = MessageBoxW(
                     HWND(std::ptr::null_mut()),
-                    w!("WinUI settings host is unavailable.\nRebuild from apps/windows and settings-host, then run the latest binary."),
+                    w!(
+                        "WinUI settings host is unavailable.\nRebuild from apps/windows and settings-host, then run the latest binary."
+                    ),
                     w!("Dictator Settings"),
                     MB_OK | MB_ICONERROR,
                 );
@@ -1174,7 +1419,10 @@ fn main() -> Result<()> {
     // Callback to open config file in default editor
     ui::set_open_config_callback(|| {
         let config_path = Config::config_path();
-        if let Err(e) = std::process::Command::new("notepad").arg(&config_path).spawn() {
+        if let Err(e) = std::process::Command::new("notepad")
+            .arg(&config_path)
+            .spawn()
+        {
             error!("[MAIN] Failed to open config file: {}", e);
         }
     });
@@ -1210,7 +1458,10 @@ fn main() -> Result<()> {
     let active_model_path_for_dl = active_model_path.clone();
     let engine_for_dl = shared_engine.clone();
     ui::set_download_model_callback(move |index| {
-        let Some(model) = model_downloader::get_downloadable_models().into_iter().nth(index) else {
+        let Some(model) = model_downloader::get_downloadable_models()
+            .into_iter()
+            .nth(index)
+        else {
             return;
         };
         let filename = model.filename.to_string();
@@ -1232,13 +1483,18 @@ fn main() -> Result<()> {
             ui::set_is_downloading(true);
             overlay.show(&format!("Downloading {} (~{} MB)...", name, size_mb));
 
-            let result = model_downloader::download_model(&filename, &download_url, &target_dir, |progress| {
-                overlay.update_status_text(&format!(
-                    "Downloading {} ({:.0}%)",
-                    name,
-                    progress.progress * 100.0
-                ));
-            });
+            let result = model_downloader::download_model(
+                &filename,
+                &download_url,
+                &target_dir,
+                |progress| {
+                    overlay.update_status_text(&format!(
+                        "Downloading {} ({:.0}%)",
+                        name,
+                        progress.progress * 100.0
+                    ));
+                },
+            );
 
             ui::set_is_downloading(false);
 
@@ -1276,9 +1532,11 @@ fn main() -> Result<()> {
         });
     });
 
-    let initial_model_ok = active_model_path.read().map(|p| p.is_file()).unwrap_or(false);
-    if config.whisper.backend == WhisperBackend::Embedded && !initial_model_ok
-    {
+    let initial_model_ok = active_model_path
+        .read()
+        .map(|p| p.is_file())
+        .unwrap_or(false);
+    if config.whisper.backend == WhisperBackend::Embedded && !initial_model_ok {
         let overlay_for_hint = overlay.clone();
         thread::spawn(move || {
             thread::sleep(Duration::from_millis(800)); // let the app fully start
@@ -1425,16 +1683,14 @@ fn main() -> Result<()> {
             }
             let is_embedded = live_backend == WhisperBackend::Embedded;
 
-// Use recv_timeout to periodically check streaming events even without hotkey
+            // Use recv_timeout to periodically check streaming events even without hotkey
             let event = match rx.recv_timeout(std::time::Duration::from_millis(100)) {
                 Ok(evt) => {
                     info!("[MAIN] ===> RECEIVED event: {:?}", evt);
                     Some(evt)
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {
-                    if is_recording
-                        && let Some(started_at) = recording_started_at
-                    {
+                    if is_recording && let Some(started_at) = recording_started_at {
                         let elapsed = started_at.elapsed();
                         let elapsed_sec = elapsed.as_secs();
                         if elapsed_sec != last_recording_second {
@@ -1461,8 +1717,8 @@ fn main() -> Result<()> {
                                     *pref_guard = live_cfg.runtime.preference.clone();
                                 }
                             }
-                        let streaming_enabled = ui::is_streaming_enabled();
-                        let chunk_seconds = ui::streaming_chunk_seconds();
+                            let streaming_enabled = ui::is_streaming_enabled();
+                            let chunk_seconds = ui::streaming_chunk_seconds();
                             let mut status = format_recording_status(
                                 elapsed,
                                 streaming_enabled,
@@ -1478,7 +1734,9 @@ fn main() -> Result<()> {
                     // Idle unload: free model memory after N minutes of inactivity
                     if idle_unload_minutes > 0 && !is_recording {
                         if let Some(last) = last_transcription_time {
-                            if last.elapsed() >= Duration::from_secs(idle_unload_minutes as u64 * 60) {
+                            if last.elapsed()
+                                >= Duration::from_secs(idle_unload_minutes as u64 * 60)
+                            {
                                 if is_embedded {
                                     if whisper_engine::is_engine_loaded(&engine) {
                                         info!(
@@ -1511,7 +1769,10 @@ fn main() -> Result<()> {
             while let Ok(streaming_event) = streaming_rx.try_recv() {
                 match streaming_event {
                     StreamingEvent::PartialText(text) => {
-                        info!("[MAIN] РЎР‚РЎСџРІР‚СљРўС’ Streaming partial text: \"{}\"", text);
+                        info!(
+                            "[MAIN] РЎР‚РЎСџРІР‚СљРўС’ Streaming partial text: \"{}\"",
+                            text
+                        );
                         accumulated_text = text.clone();
                         overlay_clone.update_body_text(&text);
                     }
@@ -1543,7 +1804,9 @@ fn main() -> Result<()> {
                 }
                 HotkeyEvent::RemoteStop => {
                     if is_recording {
-                        HotkeyEvent::RecordStop { hwnd: input::get_foreground_window_handle() }
+                        HotkeyEvent::RecordStop {
+                            hwnd: input::get_foreground_window_handle(),
+                        }
                     } else {
                         continue; // not recording, nothing to stop
                     }
@@ -1701,7 +1964,9 @@ fn main() -> Result<()> {
                     // CRITICAL: Stop streaming FIRST while recording is still active
                     // This allows streaming to read the final buffer before it's cleared
                     if let Some(mut st) = streaming_transcriber.take() {
-                        info!("[MAIN] Stopping streaming transcription (while recorder still active)...");
+                        info!(
+                            "[MAIN] Stopping streaming transcription (while recorder still active)..."
+                        );
                         st.stop();
                         // Wait for streaming to send final text (with timeout)
                         let mut final_text_received = false;
@@ -1721,7 +1986,10 @@ fn main() -> Result<()> {
                                             break;
                                         }
                                         StreamingEvent::PartialText(text) => {
-                                            info!("[MAIN] РЎР‚РЎСџРІР‚СљРўС’ Late partial text: \"{}\"", text);
+                                            info!(
+                                                "[MAIN] РЎР‚РЎСџРІР‚СљРўС’ Late partial text: \"{}\"",
+                                                text
+                                            );
                                             // Update accumulated text even if we receive partial after stop
                                             accumulated_text = text;
                                         }
@@ -1733,7 +2001,9 @@ fn main() -> Result<()> {
                             }
                         }
                         if !final_text_received {
-                            info!("[MAIN] No final text received from streaming, using accumulated text");
+                            info!(
+                                "[MAIN] No final text received from streaming, using accumulated text"
+                            );
                         }
                     }
 
@@ -1769,7 +2039,11 @@ fn main() -> Result<()> {
                     let save_failed_audio = |reason: &str, stage: &str| {
                         if config_clone.history.enabled {
                             let duration_secs = audio_data.len() as f32 / 16000.0;
-                            let base_mode = if ui::is_streaming_enabled() { "streaming" } else { "full" };
+                            let base_mode = if ui::is_streaming_enabled() {
+                                "streaming"
+                            } else {
+                                "full"
+                            };
                             let mode = format!("{}|{}", base_mode, stage);
                             let fail_text = format!("[Transcription failed] {}", reason);
                             if let Err(err) = history.save_recording(
@@ -1784,7 +2058,7 @@ fn main() -> Result<()> {
                         }
                     };
 
-                                        // Determine raw text: use streaming results if available, otherwise transcribe full audio
+                    // Determine raw text: use streaming results if available, otherwise transcribe full audio
                     let mut raw_text = if !accumulated_text.is_empty() {
                         info!(
                             "[MAIN] Using streaming text ({} chars)",
@@ -1793,7 +2067,8 @@ fn main() -> Result<()> {
                         accumulated_text.clone()
                     } else {
                         if !is_embedded {
-                            if let Err(e) = whisper_manager.ensure_running(Duration::from_secs(30)) {
+                            if let Err(e) = whisper_manager.ensure_running(Duration::from_secs(30))
+                            {
                                 error!("[MAIN] Failed to start Whisper server: {}", e);
                                 overlay_clone.show("Whisper server startup error");
                                 std::thread::sleep(Duration::from_secs(2));
@@ -1878,9 +2153,9 @@ fn main() -> Result<()> {
                                 if audio_duration_secs > 0.1 {
                                     let observed_ratio =
                                         (transcribe_elapsed / audio_duration_secs).clamp(0.05, 2.0);
-                                    avg_transcribe_ratio =
-                                        (avg_transcribe_ratio * 0.7 + observed_ratio * 0.3)
-                                            .clamp(0.05, 2.0);
+                                    avg_transcribe_ratio = (avg_transcribe_ratio * 0.7
+                                        + observed_ratio * 0.3)
+                                        .clamp(0.05, 2.0);
                                 }
 
                                 let words = text.split_whitespace().count();
@@ -1905,7 +2180,8 @@ fn main() -> Result<()> {
                                             "[POLICY] transcription failed; retrying with fallback model {:?}",
                                             new_model_path
                                         );
-                                        overlay_clone.update_status_text("Retrying with fallback model...");
+                                        overlay_clone
+                                            .update_status_text("Retrying with fallback model...");
 
                                         let retry_started = Instant::now();
                                         let retry_language = config_clone.whisper.language.clone();
@@ -1921,14 +2197,18 @@ fn main() -> Result<()> {
                                         ) {
                                             Ok(retry_text) => {
                                                 policy_stage = String::from("embedded_model_retry");
-                                                policy_retry_count = policy_retry_count.saturating_add(1);
-                                                let retry_elapsed = retry_started.elapsed().as_secs_f32();
+                                                policy_retry_count =
+                                                    policy_retry_count.saturating_add(1);
+                                                let retry_elapsed =
+                                                    retry_started.elapsed().as_secs_f32();
                                                 if audio_duration_secs > 0.1 {
-                                                    let observed_ratio =
-                                                        (retry_elapsed / audio_duration_secs).clamp(0.05, 2.0);
-                                                    avg_transcribe_ratio =
-                                                        (avg_transcribe_ratio * 0.7 + observed_ratio * 0.3)
-                                                            .clamp(0.05, 2.0);
+                                                    let observed_ratio = (retry_elapsed
+                                                        / audio_duration_secs)
+                                                        .clamp(0.05, 2.0);
+                                                    avg_transcribe_ratio = (avg_transcribe_ratio
+                                                        * 0.7
+                                                        + observed_ratio * 0.3)
+                                                        .clamp(0.05, 2.0);
                                                 }
 
                                                 let words = retry_text.split_whitespace().count();
@@ -1945,32 +2225,55 @@ fn main() -> Result<()> {
                                                     "Transcription retry failed on fallback model: {}",
                                                     retry_err
                                                 );
-                                                if policy_enable_server_fallback.read().map(|v| *v).unwrap_or(false) {
-                                                    if let Some(server_text) = try_server_fallback_transcription(
-                                                        &mut whisper_manager,
-                                                        &audio_data,
-                                                        &config_clone.whisper.language,
-                                                        &overlay_clone,
-                                                    ) {
-                                                        policy_stage = String::from("server_fallback");
+                                                if policy_enable_server_fallback
+                                                    .read()
+                                                    .map(|v| *v)
+                                                    .unwrap_or(false)
+                                                {
+                                                    if let Some(server_text) =
+                                                        try_server_fallback_transcription(
+                                                            &mut whisper_manager,
+                                                            &audio_data,
+                                                            &config_clone.whisper.language,
+                                                            &overlay_clone,
+                                                        )
+                                                    {
+                                                        policy_stage =
+                                                            String::from("server_fallback");
                                                         server_fallback_used = true;
                                                         server_text
                                                     } else {
-                                                        if policy_enable_cloud_fallback.read().map(|v| *v).unwrap_or(false) {
-                                                            warn!("[POLICY] server fallback unavailable; cloud fallback planned but not implemented yet");
+                                                        if policy_enable_cloud_fallback
+                                                            .read()
+                                                            .map(|v| *v)
+                                                            .unwrap_or(false)
+                                                        {
+                                                            warn!(
+                                                                "[POLICY] server fallback unavailable; cloud fallback planned but not implemented yet"
+                                                            );
                                                         }
                                                         overlay_clone.hide();
-                                                        save_failed_audio("embedded retry failed and server fallback unavailable", "embedded_retry_failed");
+                                                        save_failed_audio(
+                                                            "embedded retry failed and server fallback unavailable",
+                                                            "embedded_retry_failed",
+                                                        );
                                                         continue;
                                                     }
                                                 } else {
                                                     overlay_clone.hide();
-                                                    save_failed_audio("embedded retry failed", "embedded_retry_failed");
+                                                    save_failed_audio(
+                                                        "embedded retry failed",
+                                                        "embedded_retry_failed",
+                                                    );
                                                     continue;
                                                 }
                                             }
                                         }
-                                    } else if policy_enable_server_fallback.read().map(|v| *v).unwrap_or(false) {
+                                    } else if policy_enable_server_fallback
+                                        .read()
+                                        .map(|v| *v)
+                                        .unwrap_or(false)
+                                    {
                                         if let Some(server_text) = try_server_fallback_transcription(
                                             &mut whisper_manager,
                                             &audio_data,
@@ -1981,22 +2284,37 @@ fn main() -> Result<()> {
                                             server_fallback_used = true;
                                             server_text
                                         } else {
-                                            if policy_enable_cloud_fallback.read().map(|v| *v).unwrap_or(false) {
-                                                warn!("[POLICY] no local/server fallback left; cloud fallback planned but not implemented yet");
+                                            if policy_enable_cloud_fallback
+                                                .read()
+                                                .map(|v| *v)
+                                                .unwrap_or(false)
+                                            {
+                                                warn!(
+                                                    "[POLICY] no local/server fallback left; cloud fallback planned but not implemented yet"
+                                                );
                                             }
                                             overlay_clone.hide();
-                                            save_failed_audio("server fallback unavailable", "server_fallback_unavailable");
+                                            save_failed_audio(
+                                                "server fallback unavailable",
+                                                "server_fallback_unavailable",
+                                            );
                                             continue;
                                         }
                                     } else {
                                         overlay_clone.hide();
-                                        save_failed_audio("embedded transcription failed", "embedded_failed");
+                                        save_failed_audio(
+                                            "embedded transcription failed",
+                                            "embedded_failed",
+                                        );
                                         continue;
                                     }
                                 } else {
                                     whisper_manager.stop_if_owned();
                                     overlay_clone.hide();
-                                    save_failed_audio("server transcription failed", "server_failed");
+                                    save_failed_audio(
+                                        "server transcription failed",
+                                        "server_failed",
+                                    );
                                     continue;
                                 }
                             }
@@ -2021,7 +2339,10 @@ fn main() -> Result<()> {
                             "empty_text",
                             policy_retry_count,
                             server_fallback_used,
-                            policy_enable_cloud_fallback.read().map(|v| *v).unwrap_or(false),
+                            policy_enable_cloud_fallback
+                                .read()
+                                .map(|v| *v)
+                                .unwrap_or(false),
                             &active_model_for_telemetry,
                             telemetry_duration_secs,
                             false,
@@ -2077,13 +2398,17 @@ fn main() -> Result<()> {
                                                 .map(|v| *v)
                                                 .unwrap_or(false)
                                             {
-                                                if let Some(server_text) = try_server_fallback_transcription(
-                                                    &mut whisper_manager,
-                                                    &audio_data,
-                                                    &config_clone.whisper.language,
-                                                    &overlay_clone,
-                                                ) {
-                                                    policy_stage = String::from("server_fallback_quality_guard");
+                                                if let Some(server_text) =
+                                                    try_server_fallback_transcription(
+                                                        &mut whisper_manager,
+                                                        &audio_data,
+                                                        &config_clone.whisper.language,
+                                                        &overlay_clone,
+                                                    )
+                                                {
+                                                    policy_stage = String::from(
+                                                        "server_fallback_quality_guard",
+                                                    );
                                                     server_fallback_used = true;
                                                     raw_text = server_text
                                                         .split_whitespace()
@@ -2092,8 +2417,10 @@ fn main() -> Result<()> {
                                                 }
                                             }
                                         } else {
-                                            policy_stage = String::from("embedded_quality_guard_retry");
-                                            policy_retry_count = policy_retry_count.saturating_add(1);
+                                            policy_stage =
+                                                String::from("embedded_quality_guard_retry");
+                                            policy_retry_count =
+                                                policy_retry_count.saturating_add(1);
                                             raw_text = safe_text;
                                         }
                                     }
@@ -2132,7 +2459,10 @@ fn main() -> Result<()> {
                         &policy_stage,
                         policy_retry_count,
                         server_fallback_used,
-                        policy_enable_cloud_fallback.read().map(|v| *v).unwrap_or(false),
+                        policy_enable_cloud_fallback
+                            .read()
+                            .map(|v| *v)
+                            .unwrap_or(false),
                         &active_model_for_telemetry,
                         telemetry_duration_secs,
                         true,
@@ -2170,18 +2500,26 @@ fn main() -> Result<()> {
                             final_text.split_whitespace().count(),
                             final_text.chars().count(),
                             preview,
-                            if final_text.split_whitespace().count() > 16 { "..." } else { "" }
+                            if final_text.split_whitespace().count() > 16 {
+                                "..."
+                            } else {
+                                ""
+                            }
                         ));
                     }
 
                     // Inject text into focused application
-                    if let Err(e) = input::inject_text(&final_text, &config_clone.injection.method) {
+                    if let Err(e) = input::inject_text(&final_text, &config_clone.injection.method)
+                    {
                         error!("Failed to inject text: {}", e);
                     }
 
                     // Hide overlay after configured confirmation period.
                     if config_clone.ui.show_post_transcription_overlay {
-                        let secs = config_clone.ui.post_transcription_overlay_seconds.clamp(1, 15) as u64;
+                        let secs = config_clone
+                            .ui
+                            .post_transcription_overlay_seconds
+                            .clamp(1, 15) as u64;
                         std::thread::sleep(std::time::Duration::from_secs(secs));
                     }
                     overlay_clone.hide();
@@ -2192,7 +2530,11 @@ fn main() -> Result<()> {
                     // Save recording to history (if enabled)
                     if config_clone.history.enabled {
                         let duration_secs = audio_data.len() as f32 / 16000.0;
-                        let base_mode = if ui::is_streaming_enabled() { "streaming" } else { "full" };
+                        let base_mode = if ui::is_streaming_enabled() {
+                            "streaming"
+                        } else {
+                            "full"
+                        };
                         let mode = format!("{}|{}", base_mode, policy_stage);
                         if let Err(e) = history.save_recording(
                             &audio_data,
@@ -2214,7 +2556,10 @@ fn main() -> Result<()> {
             while let Ok(streaming_event) = streaming_rx.try_recv() {
                 match streaming_event {
                     StreamingEvent::PartialText(text) => {
-                        info!("[MAIN] РЎР‚РЎСџРІР‚СљРўС’ Streaming partial text: \"{}\"", text);
+                        info!(
+                            "[MAIN] РЎР‚РЎСџРІР‚СљРўС’ Streaming partial text: \"{}\"",
+                            text
+                        );
                         accumulated_text = text.clone();
                         overlay_clone.update_body_text(&text);
                     }
@@ -2238,130 +2583,3 @@ fn main() -> Result<()> {
     info!("Dictator shutting down");
     Ok(())
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

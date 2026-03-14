@@ -1,29 +1,27 @@
-
 //! Settings window - native Win32 settings UI.
 //! Multi-page layout with immediate apply (no Save button).
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 
 use tracing::error;
-use windows::core::w;
 use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
-use windows::Win32::Graphics::Gdi::{GetStockObject, DEFAULT_GUI_FONT, HBRUSH, WHITE_BRUSH};
+use windows::Win32::Graphics::Gdi::{DEFAULT_GUI_FONT, GetStockObject, HBRUSH, WHITE_BRUSH};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
-    BM_GETCHECK, BM_SETCHECK, CB_ADDSTRING, CB_GETCURSEL, CB_SETCURSEL,
-    CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow,
-    DispatchMessageW, GetMessageW,
+    BM_GETCHECK, BM_SETCHECK, CB_ADDSTRING, CB_GETCURSEL, CB_SETCURSEL, CS_HREDRAW, CS_VREDRAW,
+    CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW,
     GetWindowLongPtrW, GetWindowTextLengthW, GetWindowTextW, HMENU, IDYES, KillTimer, LB_ADDSTRING,
-    LB_GETCURSEL, LB_RESETCONTENT, MB_ICONERROR,
-    MB_ICONINFORMATION, MB_OK, MB_YESNO, MSG, MessageBoxW, PostQuitMessage, RegisterClassW,
-    SendMessageW, SetTimer, SetWindowLongPtrW, SetWindowTextW, ShowWindow, SW_HIDE, SW_SHOW,
-    WINDOW_EX_STYLE, WINDOW_STYLE, WM_CLOSE, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_SETFONT,
-    WM_TIMER, WNDCLASSW, WS_BORDER, WS_CAPTION, WS_CHILD, WS_EX_CLIENTEDGE, WS_EX_DLGMODALFRAME,
-    WS_OVERLAPPED, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+    LB_GETCURSEL, LB_RESETCONTENT, MB_ICONERROR, MB_ICONINFORMATION, MB_OK, MB_YESNO, MSG,
+    MessageBoxW, PostQuitMessage, RegisterClassW, SW_HIDE, SW_SHOW, SendMessageW, SetTimer,
+    SetWindowLongPtrW, SetWindowTextW, ShowWindow, WINDOW_EX_STYLE, WINDOW_STYLE, WM_CLOSE,
+    WM_COMMAND, WM_CREATE, WM_DESTROY, WM_SETFONT, WM_TIMER, WNDCLASSW, WS_BORDER, WS_CAPTION,
+    WS_CHILD, WS_EX_CLIENTEDGE, WS_EX_DLGMODALFRAME, WS_OVERLAPPED, WS_SYSMENU, WS_TABSTOP,
+    WS_VISIBLE, WS_VSCROLL,
 };
+use windows::core::w;
 
 const BS_PUSHBUTTON: u32 = 0x0000_0000;
 const BS_AUTOCHECKBOX: u32 = 0x0000_0003;
@@ -290,8 +288,13 @@ unsafe extern "system" fn window_proc(
     unsafe {
         match msg {
             WM_CREATE => {
-                let cs = &*(lparam.0 as *const windows::Win32::UI::WindowsAndMessaging::CREATESTRUCTW);
-                SetWindowLongPtrW(hwnd, windows::Win32::UI::WindowsAndMessaging::GWLP_USERDATA, cs.lpCreateParams as isize);
+                let cs =
+                    &*(lparam.0 as *const windows::Win32::UI::WindowsAndMessaging::CREATESTRUCTW);
+                SetWindowLongPtrW(
+                    hwnd,
+                    windows::Win32::UI::WindowsAndMessaging::GWLP_USERDATA,
+                    cs.lpCreateParams as isize,
+                );
                 let state = &mut *(cs.lpCreateParams as *mut WindowState);
                 create_controls(hwnd, state);
                 show_page(state, SettingsPage::Models);
@@ -301,14 +304,18 @@ unsafe extern "system" fn window_proc(
             WM_COMMAND => {
                 let id = (wparam.0 & 0xFFFF) as usize;
                 let notify = ((wparam.0 >> 16) & 0xFFFF) as u16;
-                let state_ptr = GetWindowLongPtrW(hwnd, windows::Win32::UI::WindowsAndMessaging::GWLP_USERDATA) as *mut WindowState;
+                let state_ptr =
+                    GetWindowLongPtrW(hwnd, windows::Win32::UI::WindowsAndMessaging::GWLP_USERDATA)
+                        as *mut WindowState;
                 if !state_ptr.is_null() {
                     handle_command(hwnd, id, notify, &mut *state_ptr);
                 }
                 LRESULT(0)
             }
             WM_TIMER => {
-                let state_ptr = GetWindowLongPtrW(hwnd, windows::Win32::UI::WindowsAndMessaging::GWLP_USERDATA) as *mut WindowState;
+                let state_ptr =
+                    GetWindowLongPtrW(hwnd, windows::Win32::UI::WindowsAndMessaging::GWLP_USERDATA)
+                        as *mut WindowState;
                 if !state_ptr.is_null() {
                     let state = &mut *state_ptr;
                     populate_runtime_panel(state);
@@ -320,10 +327,16 @@ unsafe extern "system" fn window_proc(
             }
             WM_CLOSE => {
                 let _ = KillTimer(hwnd, TIMER_UI_REFRESH);
-                let state_ptr = GetWindowLongPtrW(hwnd, windows::Win32::UI::WindowsAndMessaging::GWLP_USERDATA) as *mut WindowState;
+                let state_ptr =
+                    GetWindowLongPtrW(hwnd, windows::Win32::UI::WindowsAndMessaging::GWLP_USERDATA)
+                        as *mut WindowState;
                 if !state_ptr.is_null() {
                     drop(Box::from_raw(state_ptr));
-                    SetWindowLongPtrW(hwnd, windows::Win32::UI::WindowsAndMessaging::GWLP_USERDATA, 0);
+                    SetWindowLongPtrW(
+                        hwnd,
+                        windows::Win32::UI::WindowsAndMessaging::GWLP_USERDATA,
+                        0,
+                    );
                 }
                 DestroyWindow(hwnd).ok();
                 LRESULT(0)
@@ -352,10 +365,20 @@ fn create_controls(hwnd: HWND, state: &mut WindowState) {
                   id: usize|
          -> HWND {
             let ctrl = CreateWindowExW(
-                WINDOW_EX_STYLE::default(), class, text,
+                WINDOW_EX_STYLE::default(),
+                class,
+                text,
                 WINDOW_STYLE(WS_CHILD.0 | WS_VISIBLE.0 | style),
-                x, y, w, h, hwnd, HMENU(id as *mut _), hinstance, None,
-            ).unwrap_or(HWND(std::ptr::null_mut()));
+                x,
+                y,
+                w,
+                h,
+                hwnd,
+                HMENU(id as *mut _),
+                hinstance,
+                None,
+            )
+            .unwrap_or(HWND(std::ptr::null_mut()));
             SendMessageW(ctrl, WM_SETFONT, WPARAM(font.0 as usize), LPARAM(1));
             ctrl
         };
@@ -371,124 +394,531 @@ fn create_controls(hwnd: HWND, state: &mut WindowState) {
                      id: usize|
          -> HWND {
             let ctrl = CreateWindowExW(
-                ex, class, text,
+                ex,
+                class,
+                text,
                 WINDOW_STYLE(WS_CHILD.0 | WS_VISIBLE.0 | style),
-                x, y, w, h, hwnd, HMENU(id as *mut _), hinstance, None,
-            ).unwrap_or(HWND(std::ptr::null_mut()));
+                x,
+                y,
+                w,
+                h,
+                hwnd,
+                HMENU(id as *mut _),
+                hinstance,
+                None,
+            )
+            .unwrap_or(HWND(std::ptr::null_mut()));
             SendMessageW(ctrl, WM_SETFONT, WPARAM(font.0 as usize), LPARAM(1));
             ctrl
         };
 
         mk(w!("STATIC"), w!("Settings"), 0, 20, 20, 160, 24, 0);
-        state.nav_models = mk(w!("BUTTON"), w!("Models"), BS_PUSHBUTTON | BS_FLAT | WS_TABSTOP.0, 20, 64, 180, 34, IDC_NAV_MODELS);
-        state.nav_runtime = mk(w!("BUTTON"), w!("Runtime"), BS_PUSHBUTTON | BS_FLAT | WS_TABSTOP.0, 20, 104, 180, 34, IDC_NAV_RUNTIME);
-        state.nav_dictation = mk(w!("BUTTON"), w!("Dictation"), BS_PUSHBUTTON | BS_FLAT | WS_TABSTOP.0, 20, 144, 180, 34, IDC_NAV_DICTATION);
-        state.nav_storage = mk(w!("BUTTON"), w!("Storage"), BS_PUSHBUTTON | BS_FLAT | WS_TABSTOP.0, 20, 184, 180, 34, IDC_NAV_STORAGE);
-        state.nav_about = mk(w!("BUTTON"), w!("About"), BS_PUSHBUTTON | BS_FLAT | WS_TABSTOP.0, 20, 224, 180, 34, IDC_NAV_ABOUT);
+        state.nav_models = mk(
+            w!("BUTTON"),
+            w!("Models"),
+            BS_PUSHBUTTON | BS_FLAT | WS_TABSTOP.0,
+            20,
+            64,
+            180,
+            34,
+            IDC_NAV_MODELS,
+        );
+        state.nav_runtime = mk(
+            w!("BUTTON"),
+            w!("Runtime"),
+            BS_PUSHBUTTON | BS_FLAT | WS_TABSTOP.0,
+            20,
+            104,
+            180,
+            34,
+            IDC_NAV_RUNTIME,
+        );
+        state.nav_dictation = mk(
+            w!("BUTTON"),
+            w!("Dictation"),
+            BS_PUSHBUTTON | BS_FLAT | WS_TABSTOP.0,
+            20,
+            144,
+            180,
+            34,
+            IDC_NAV_DICTATION,
+        );
+        state.nav_storage = mk(
+            w!("BUTTON"),
+            w!("Storage"),
+            BS_PUSHBUTTON | BS_FLAT | WS_TABSTOP.0,
+            20,
+            184,
+            180,
+            34,
+            IDC_NAV_STORAGE,
+        );
+        state.nav_about = mk(
+            w!("BUTTON"),
+            w!("About"),
+            BS_PUSHBUTTON | BS_FLAT | WS_TABSTOP.0,
+            20,
+            224,
+            180,
+            34,
+            IDC_NAV_ABOUT,
+        );
         let m_title = mk(w!("STATIC"), w!("Models"), 0, 230, 20, 860, 24, 0);
         state.models_controls.push(m_title);
-        state.models_controls.push(mk(w!("STATIC"), w!("Installed models"), 0, 230, 56, 280, 20, 0));
+        state.models_controls.push(mk(
+            w!("STATIC"),
+            w!("Installed models"),
+            0,
+            230,
+            56,
+            280,
+            20,
+            0,
+        ));
 
-        state.hwnd_model_list = mk_ex(w!("LISTBOX"), w!(""), WS_EX_CLIENTEDGE,
+        state.hwnd_model_list = mk_ex(
+            w!("LISTBOX"),
+            w!(""),
+            WS_EX_CLIENTEDGE,
             LBS_NOTIFY_U32 | LBS_NOINTEGRALHEIGHT_U32 | WS_VSCROLL.0 | WS_TABSTOP.0 | WS_BORDER.0,
-            230, 80, 420, 210, IDC_MODEL_LIST);
+            230,
+            80,
+            420,
+            210,
+            IDC_MODEL_LIST,
+        );
         state.models_controls.push(state.hwnd_model_list);
 
-        state.hwnd_model_details = mk_ex(w!("EDIT"), w!(""), WS_EX_CLIENTEDGE,
+        state.hwnd_model_details = mk_ex(
+            w!("EDIT"),
+            w!(""),
+            WS_EX_CLIENTEDGE,
             WS_BORDER.0 | ES_MULTILINE_U32 | ES_AUTOVSCROLL_U32 | ES_READONLY_U32,
-            230, 300, 420, 130, IDC_MODEL_DETAILS);
+            230,
+            300,
+            420,
+            130,
+            IDC_MODEL_DETAILS,
+        );
         state.models_controls.push(state.hwnd_model_details);
 
-        state.models_controls.push(mk(w!("BUTTON"), w!("Use Selected"), BS_PUSHBUTTON | BS_FLAT | WS_TABSTOP.0, 662, 80, 150, 30, IDC_BTN_USE_MODEL));
-        state.models_controls.push(mk(w!("BUTTON"), w!("Delete Selected"), BS_PUSHBUTTON | BS_FLAT | WS_TABSTOP.0, 662, 118, 150, 30, IDC_BTN_DELETE_MODEL));
+        state.models_controls.push(mk(
+            w!("BUTTON"),
+            w!("Use Selected"),
+            BS_PUSHBUTTON | BS_FLAT | WS_TABSTOP.0,
+            662,
+            80,
+            150,
+            30,
+            IDC_BTN_USE_MODEL,
+        ));
+        state.models_controls.push(mk(
+            w!("BUTTON"),
+            w!("Delete Selected"),
+            BS_PUSHBUTTON | BS_FLAT | WS_TABSTOP.0,
+            662,
+            118,
+            150,
+            30,
+            IDC_BTN_DELETE_MODEL,
+        ));
 
-        state.models_controls.push(mk(w!("STATIC"), w!("Download catalog"), 0, 830, 56, 260, 20, 0));
-        state.hwnd_download_list = mk_ex(w!("LISTBOX"), w!(""), WS_EX_CLIENTEDGE,
+        state.models_controls.push(mk(
+            w!("STATIC"),
+            w!("Download catalog"),
+            0,
+            830,
+            56,
+            260,
+            20,
+            0,
+        ));
+        state.hwnd_download_list = mk_ex(
+            w!("LISTBOX"),
+            w!(""),
+            WS_EX_CLIENTEDGE,
             LBS_NOTIFY_U32 | LBS_NOINTEGRALHEIGHT_U32 | WS_VSCROLL.0 | WS_TABSTOP.0 | WS_BORDER.0,
-            830, 80, 260, 210, IDC_DOWNLOAD_LIST);
+            830,
+            80,
+            260,
+            210,
+            IDC_DOWNLOAD_LIST,
+        );
         state.models_controls.push(state.hwnd_download_list);
 
-        state.hwnd_download_details = mk_ex(w!("EDIT"), w!(""), WS_EX_CLIENTEDGE,
+        state.hwnd_download_details = mk_ex(
+            w!("EDIT"),
+            w!(""),
+            WS_EX_CLIENTEDGE,
             WS_BORDER.0 | ES_MULTILINE_U32 | ES_AUTOVSCROLL_U32 | ES_READONLY_U32,
-            830, 300, 260, 130, IDC_DOWNLOAD_DETAILS);
+            830,
+            300,
+            260,
+            130,
+            IDC_DOWNLOAD_DETAILS,
+        );
         state.models_controls.push(state.hwnd_download_details);
 
-        state.models_controls.push(mk(w!("BUTTON"), w!("Download"), BS_PUSHBUTTON | BS_FLAT | WS_TABSTOP.0, 830, 438, 130, 30, IDC_BTN_DOWNLOAD));
+        state.models_controls.push(mk(
+            w!("BUTTON"),
+            w!("Download"),
+            BS_PUSHBUTTON | BS_FLAT | WS_TABSTOP.0,
+            830,
+            438,
+            130,
+            30,
+            IDC_BTN_DOWNLOAD,
+        ));
 
-        state.hwnd_download_progress = mk(w!("msctls_progress32"), w!(""), WS_TABSTOP.0, 230, 446, 420, 18, IDC_PROGRESS_DOWNLOAD);
-        SendMessageW(state.hwnd_download_progress, PBM_SETRANGE32, WPARAM(0), LPARAM(100));
+        state.hwnd_download_progress = mk(
+            w!("msctls_progress32"),
+            w!(""),
+            WS_TABSTOP.0,
+            230,
+            446,
+            420,
+            18,
+            IDC_PROGRESS_DOWNLOAD,
+        );
+        SendMessageW(
+            state.hwnd_download_progress,
+            PBM_SETRANGE32,
+            WPARAM(0),
+            LPARAM(100),
+        );
         state.models_controls.push(state.hwnd_download_progress);
 
-        state.hwnd_download_status = mk(w!("STATIC"), w!("Download: idle"), 0, 230, 470, 860, 20, IDC_STATIC_DOWNLOAD_STATUS);
+        state.hwnd_download_status = mk(
+            w!("STATIC"),
+            w!("Download: idle"),
+            0,
+            230,
+            470,
+            860,
+            20,
+            IDC_STATIC_DOWNLOAD_STATUS,
+        );
         state.models_controls.push(state.hwnd_download_status);
 
-        state.runtime_controls.push(mk(w!("STATIC"), w!("Runtime & Recommendations"), 0, 230, 20, 860, 24, 0));
-        state.runtime_controls.push(mk(w!("STATIC"), w!("Runtime mode"), 0, 230, 60, 140, 20, 0));
-        state.hwnd_cmb_runtime_mode = mk(w!("COMBOBOX"), w!(""), CBS_DROPDOWNLIST | WS_TABSTOP.0, 230, 84, 260, 140, IDC_CMB_RUNTIME_MODE);
+        state.runtime_controls.push(mk(
+            w!("STATIC"),
+            w!("Runtime & Recommendations"),
+            0,
+            230,
+            20,
+            860,
+            24,
+            0,
+        ));
+        state
+            .runtime_controls
+            .push(mk(w!("STATIC"), w!("Runtime mode"), 0, 230, 60, 140, 20, 0));
+        state.hwnd_cmb_runtime_mode = mk(
+            w!("COMBOBOX"),
+            w!(""),
+            CBS_DROPDOWNLIST | WS_TABSTOP.0,
+            230,
+            84,
+            260,
+            140,
+            IDC_CMB_RUNTIME_MODE,
+        );
         state.runtime_controls.push(state.hwnd_cmb_runtime_mode);
         for opt in ["Auto (Recommended)\0", "Force GPU\0", "Force CPU\0"] {
             let wide: Vec<u16> = opt.encode_utf16().collect();
-            SendMessageW(state.hwnd_cmb_runtime_mode, CB_ADDSTRING, WPARAM(0), LPARAM(wide.as_ptr() as isize));
+            SendMessageW(
+                state.hwnd_cmb_runtime_mode,
+                CB_ADDSTRING,
+                WPARAM(0),
+                LPARAM(wide.as_ptr() as isize),
+            );
         }
-        let runtime_sel = match state.params.runtime_mode.as_str() { "force_gpu" => 1, "force_cpu" => 2, _ => 0 };
-        SendMessageW(state.hwnd_cmb_runtime_mode, CB_SETCURSEL, WPARAM(runtime_sel), LPARAM(0));
-        state.runtime_controls.push(mk(w!("BUTTON"), w!("Refresh diagnostics"), BS_PUSHBUTTON | BS_FLAT | WS_TABSTOP.0, 500, 84, 180, 30, IDC_BTN_REFRESH_RUNTIME));
-        state.hwnd_runtime_explain = mk_ex(w!("EDIT"), w!(""), WS_EX_CLIENTEDGE,
+        let runtime_sel = match state.params.runtime_mode.as_str() {
+            "force_gpu" => 1,
+            "force_cpu" => 2,
+            _ => 0,
+        };
+        SendMessageW(
+            state.hwnd_cmb_runtime_mode,
+            CB_SETCURSEL,
+            WPARAM(runtime_sel),
+            LPARAM(0),
+        );
+        state.runtime_controls.push(mk(
+            w!("BUTTON"),
+            w!("Refresh diagnostics"),
+            BS_PUSHBUTTON | BS_FLAT | WS_TABSTOP.0,
+            500,
+            84,
+            180,
+            30,
+            IDC_BTN_REFRESH_RUNTIME,
+        ));
+        state.hwnd_runtime_explain = mk_ex(
+            w!("EDIT"),
+            w!(""),
+            WS_EX_CLIENTEDGE,
             WS_BORDER.0 | ES_MULTILINE_U32 | ES_AUTOVSCROLL_U32 | ES_READONLY_U32,
-            230, 130, 860, 110, IDC_RUNTIME_EXPLAIN);
+            230,
+            130,
+            860,
+            110,
+            IDC_RUNTIME_EXPLAIN,
+        );
         state.runtime_controls.push(state.hwnd_runtime_explain);
-        state.hwnd_runtime_status = mk_ex(w!("EDIT"), w!(""), WS_EX_CLIENTEDGE,
+        state.hwnd_runtime_status = mk_ex(
+            w!("EDIT"),
+            w!(""),
+            WS_EX_CLIENTEDGE,
             WS_BORDER.0 | ES_MULTILINE_U32 | ES_AUTOVSCROLL_U32 | ES_READONLY_U32,
-            230, 250, 860, 320, IDC_RUNTIME_STATUS);
+            230,
+            250,
+            860,
+            320,
+            IDC_RUNTIME_STATUS,
+        );
         state.runtime_controls.push(state.hwnd_runtime_status);
 
-        state.dictation_controls.push(mk(w!("STATIC"), w!("Dictation Behavior"), 0, 230, 20, 860, 24, 0));
-        state.dictation_controls.push(mk(w!("STATIC"), w!("Text injection"), 0, 230, 60, 140, 20, 0));
-        state.hwnd_cmb_injection = mk(w!("COMBOBOX"), w!(""), CBS_DROPDOWNLIST | WS_TABSTOP.0, 230, 84, 360, 120, IDC_CMB_INJECTION);
+        state.dictation_controls.push(mk(
+            w!("STATIC"),
+            w!("Dictation Behavior"),
+            0,
+            230,
+            20,
+            860,
+            24,
+            0,
+        ));
+        state.dictation_controls.push(mk(
+            w!("STATIC"),
+            w!("Text injection"),
+            0,
+            230,
+            60,
+            140,
+            20,
+            0,
+        ));
+        state.hwnd_cmb_injection = mk(
+            w!("COMBOBOX"),
+            w!(""),
+            CBS_DROPDOWNLIST | WS_TABSTOP.0,
+            230,
+            84,
+            360,
+            120,
+            IDC_CMB_INJECTION,
+        );
         state.dictation_controls.push(state.hwnd_cmb_injection);
-        for opt in ["Direct (SendInput)\0", "Clipboard (Ctrl+V)\0", "Clipboard + Enter\0"] {
+        for opt in [
+            "Direct (SendInput)\0",
+            "Clipboard (Ctrl+V)\0",
+            "Clipboard + Enter\0",
+        ] {
             let wide: Vec<u16> = opt.encode_utf16().collect();
-            SendMessageW(state.hwnd_cmb_injection, CB_ADDSTRING, WPARAM(0), LPARAM(wide.as_ptr() as isize));
+            SendMessageW(
+                state.hwnd_cmb_injection,
+                CB_ADDSTRING,
+                WPARAM(0),
+                LPARAM(wide.as_ptr() as isize),
+            );
         }
-        let inj_sel: usize = match state.params.injection_method.as_str() { "clipboard" => 1, "clipboard_enter" => 2, _ => 0 };
-        SendMessageW(state.hwnd_cmb_injection, CB_SETCURSEL, WPARAM(inj_sel), LPARAM(0));
+        let inj_sel: usize = match state.params.injection_method.as_str() {
+            "clipboard" => 1,
+            "clipboard_enter" => 2,
+            _ => 0,
+        };
+        SendMessageW(
+            state.hwnd_cmb_injection,
+            CB_SETCURSEL,
+            WPARAM(inj_sel),
+            LPARAM(0),
+        );
 
-        state.hwnd_chk_llm = mk(w!("BUTTON"), w!("Enable Ollama correction"), BS_AUTOCHECKBOX | WS_TABSTOP.0, 230, 126, 280, 24, IDC_CHK_LLM);
-        SendMessageW(state.hwnd_chk_llm, BM_SETCHECK, WPARAM(if state.params.llm_enabled { 1 } else { 0 }), LPARAM(0));
+        state.hwnd_chk_llm = mk(
+            w!("BUTTON"),
+            w!("Enable Ollama correction"),
+            BS_AUTOCHECKBOX | WS_TABSTOP.0,
+            230,
+            126,
+            280,
+            24,
+            IDC_CHK_LLM,
+        );
+        SendMessageW(
+            state.hwnd_chk_llm,
+            BM_SETCHECK,
+            WPARAM(if state.params.llm_enabled { 1 } else { 0 }),
+            LPARAM(0),
+        );
         state.dictation_controls.push(state.hwnd_chk_llm);
-        state.dictation_controls.push(mk(w!("STATIC"), w!("Ollama URL"), 0, 230, 166, 120, 20, 0));
+        state
+            .dictation_controls
+            .push(mk(w!("STATIC"), w!("Ollama URL"), 0, 230, 166, 120, 20, 0));
 
-        state.hwnd_edit_ollama_url = mk_ex(w!("EDIT"), w!(""), WS_EX_CLIENTEDGE, WS_TABSTOP.0 | WS_BORDER.0, 230, 190, 560, 26, IDC_EDIT_OLLAMA_URL);
+        state.hwnd_edit_ollama_url = mk_ex(
+            w!("EDIT"),
+            w!(""),
+            WS_EX_CLIENTEDGE,
+            WS_TABSTOP.0 | WS_BORDER.0,
+            230,
+            190,
+            560,
+            26,
+            IDC_EDIT_OLLAMA_URL,
+        );
         state.dictation_controls.push(state.hwnd_edit_ollama_url);
         set_control_text(state.hwnd_edit_ollama_url, &state.params.ollama_url);
 
-        state.dictation_controls.push(mk(w!("STATIC"), w!("Ollama model"), 0, 230, 228, 120, 20, 0));
-        state.hwnd_edit_ollama_model = mk_ex(w!("EDIT"), w!(""), WS_EX_CLIENTEDGE, WS_TABSTOP.0 | WS_BORDER.0, 230, 252, 360, 26, IDC_EDIT_OLLAMA_MODEL);
+        state.dictation_controls.push(mk(
+            w!("STATIC"),
+            w!("Ollama model"),
+            0,
+            230,
+            228,
+            120,
+            20,
+            0,
+        ));
+        state.hwnd_edit_ollama_model = mk_ex(
+            w!("EDIT"),
+            w!(""),
+            WS_EX_CLIENTEDGE,
+            WS_TABSTOP.0 | WS_BORDER.0,
+            230,
+            252,
+            360,
+            26,
+            IDC_EDIT_OLLAMA_MODEL,
+        );
         state.dictation_controls.push(state.hwnd_edit_ollama_model);
         set_control_text(state.hwnd_edit_ollama_model, &state.params.ollama_model);
 
-        state.dictation_controls.push(mk(w!("STATIC"), w!("Idle unload (minutes)"), 0, 230, 290, 200, 20, 0));
-        state.hwnd_edit_idle = mk_ex(w!("EDIT"), w!(""), WS_EX_CLIENTEDGE, WS_TABSTOP.0 | WS_BORDER.0, 230, 314, 120, 26, IDC_EDIT_IDLE);
+        state.dictation_controls.push(mk(
+            w!("STATIC"),
+            w!("Idle unload (minutes)"),
+            0,
+            230,
+            290,
+            200,
+            20,
+            0,
+        ));
+        state.hwnd_edit_idle = mk_ex(
+            w!("EDIT"),
+            w!(""),
+            WS_EX_CLIENTEDGE,
+            WS_TABSTOP.0 | WS_BORDER.0,
+            230,
+            314,
+            120,
+            26,
+            IDC_EDIT_IDLE,
+        );
         state.dictation_controls.push(state.hwnd_edit_idle);
-        set_control_text(state.hwnd_edit_idle, &state.params.idle_unload_minutes.to_string());
+        set_control_text(
+            state.hwnd_edit_idle,
+            &state.params.idle_unload_minutes.to_string(),
+        );
 
-        state.storage_controls.push(mk(w!("STATIC"), w!("Shared Storage"), 0, 230, 20, 860, 24, 0));
-        state.hwnd_storage_info = mk_ex(w!("EDIT"), w!(""), WS_EX_CLIENTEDGE,
+        state.storage_controls.push(mk(
+            w!("STATIC"),
+            w!("Shared Storage"),
+            0,
+            230,
+            20,
+            860,
+            24,
+            0,
+        ));
+        state.hwnd_storage_info = mk_ex(
+            w!("EDIT"),
+            w!(""),
+            WS_EX_CLIENTEDGE,
             WS_BORDER.0 | ES_MULTILINE_U32 | ES_AUTOVSCROLL_U32 | ES_READONLY_U32,
-            230, 60, 860, 260, IDC_STORAGE_INFO);
+            230,
+            60,
+            860,
+            260,
+            IDC_STORAGE_INFO,
+        );
         state.storage_controls.push(state.hwnd_storage_info);
-        state.storage_controls.push(mk(w!("BUTTON"), w!("Open models folder"), BS_PUSHBUTTON | BS_FLAT | WS_TABSTOP.0, 230, 336, 180, 30, IDC_BTN_OPEN_SHARED_MODELS));
-        state.storage_controls.push(mk(w!("BUTTON"), w!("Open store JSON"), BS_PUSHBUTTON | BS_FLAT | WS_TABSTOP.0, 420, 336, 160, 30, IDC_BTN_OPEN_SHARED_STORE));
-        state.storage_controls.push(mk(w!("BUTTON"), w!("Open history folder"), BS_PUSHBUTTON | BS_FLAT | WS_TABSTOP.0, 590, 336, 170, 30, IDC_BTN_OPEN_HISTORY));
-        state.storage_controls.push(mk(w!("BUTTON"), w!("Open logs"), BS_PUSHBUTTON | BS_FLAT | WS_TABSTOP.0, 770, 336, 120, 30, IDC_BTN_OPEN_LOGS));
-        state.storage_controls.push(mk(w!("BUTTON"), w!("Open config"), BS_PUSHBUTTON | BS_FLAT | WS_TABSTOP.0, 900, 336, 130, 30, IDC_BTN_OPEN_CONFIG));
+        state.storage_controls.push(mk(
+            w!("BUTTON"),
+            w!("Open models folder"),
+            BS_PUSHBUTTON | BS_FLAT | WS_TABSTOP.0,
+            230,
+            336,
+            180,
+            30,
+            IDC_BTN_OPEN_SHARED_MODELS,
+        ));
+        state.storage_controls.push(mk(
+            w!("BUTTON"),
+            w!("Open store JSON"),
+            BS_PUSHBUTTON | BS_FLAT | WS_TABSTOP.0,
+            420,
+            336,
+            160,
+            30,
+            IDC_BTN_OPEN_SHARED_STORE,
+        ));
+        state.storage_controls.push(mk(
+            w!("BUTTON"),
+            w!("Open history folder"),
+            BS_PUSHBUTTON | BS_FLAT | WS_TABSTOP.0,
+            590,
+            336,
+            170,
+            30,
+            IDC_BTN_OPEN_HISTORY,
+        ));
+        state.storage_controls.push(mk(
+            w!("BUTTON"),
+            w!("Open logs"),
+            BS_PUSHBUTTON | BS_FLAT | WS_TABSTOP.0,
+            770,
+            336,
+            120,
+            30,
+            IDC_BTN_OPEN_LOGS,
+        ));
+        state.storage_controls.push(mk(
+            w!("BUTTON"),
+            w!("Open config"),
+            BS_PUSHBUTTON | BS_FLAT | WS_TABSTOP.0,
+            900,
+            336,
+            130,
+            30,
+            IDC_BTN_OPEN_CONFIG,
+        ));
 
-        state.about_controls.push(mk(w!("STATIC"), w!("About"), 0, 230, 20, 860, 24, 0));
-        state.hwnd_about_info = mk_ex(w!("EDIT"), w!(""), WS_EX_CLIENTEDGE,
+        state
+            .about_controls
+            .push(mk(w!("STATIC"), w!("About"), 0, 230, 20, 860, 24, 0));
+        state.hwnd_about_info = mk_ex(
+            w!("EDIT"),
+            w!(""),
+            WS_EX_CLIENTEDGE,
             WS_BORDER.0 | ES_MULTILINE_U32 | ES_AUTOVSCROLL_U32 | ES_READONLY_U32,
-            230, 60, 860, 280, IDC_ABOUT_INFO);
+            230,
+            60,
+            860,
+            280,
+            IDC_ABOUT_INFO,
+        );
         state.about_controls.push(state.hwnd_about_info);
-        state.about_controls.push(mk(w!("BUTTON"), w!("Close"), BS_PUSHBUTTON | BS_FLAT | WS_TABSTOP.0, 960, 700, 130, 34, IDC_BTN_CLOSE));
+        state.about_controls.push(mk(
+            w!("BUTTON"),
+            w!("Close"),
+            BS_PUSHBUTTON | BS_FLAT | WS_TABSTOP.0,
+            960,
+            700,
+            130,
+            34,
+            IDC_BTN_CLOSE,
+        ));
 
         populate_model_list(state.hwnd_model_list, &state.params);
         populate_download_list(state);
@@ -503,16 +933,48 @@ fn create_controls(hwnd: HWND, state: &mut WindowState) {
 
 fn set_control_text(hwnd: HWND, text: &str) {
     let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
-    unsafe { SetWindowTextW(hwnd, windows::core::PCWSTR(wide.as_ptr())).ok(); }
+    unsafe {
+        SetWindowTextW(hwnd, windows::core::PCWSTR(wide.as_ptr())).ok();
+    }
 }
 
 fn set_active_nav(state: &WindowState) {
     let (m, r, d, s, a) = match state.current_page {
-        SettingsPage::Models => ("Models  [Selected]", "Runtime", "Dictation", "Storage", "About"),
-        SettingsPage::Runtime => ("Models", "Runtime  [Selected]", "Dictation", "Storage", "About"),
-        SettingsPage::Dictation => ("Models", "Runtime", "Dictation  [Selected]", "Storage", "About"),
-        SettingsPage::Storage => ("Models", "Runtime", "Dictation", "Storage  [Selected]", "About"),
-        SettingsPage::About => ("Models", "Runtime", "Dictation", "Storage", "About  [Selected]"),
+        SettingsPage::Models => (
+            "Models  [Selected]",
+            "Runtime",
+            "Dictation",
+            "Storage",
+            "About",
+        ),
+        SettingsPage::Runtime => (
+            "Models",
+            "Runtime  [Selected]",
+            "Dictation",
+            "Storage",
+            "About",
+        ),
+        SettingsPage::Dictation => (
+            "Models",
+            "Runtime",
+            "Dictation  [Selected]",
+            "Storage",
+            "About",
+        ),
+        SettingsPage::Storage => (
+            "Models",
+            "Runtime",
+            "Dictation",
+            "Storage  [Selected]",
+            "About",
+        ),
+        SettingsPage::About => (
+            "Models",
+            "Runtime",
+            "Dictation",
+            "Storage",
+            "About  [Selected]",
+        ),
     };
     set_control_text(state.nav_models, m);
     set_control_text(state.nav_runtime, r);
@@ -523,24 +985,39 @@ fn set_active_nav(state: &WindowState) {
 
 fn show_page(state: &mut WindowState, page: SettingsPage) {
     state.current_page = page;
-    let all_pages = [SettingsPage::Models, SettingsPage::Runtime, SettingsPage::Dictation, SettingsPage::Storage, SettingsPage::About];
+    let all_pages = [
+        SettingsPage::Models,
+        SettingsPage::Runtime,
+        SettingsPage::Dictation,
+        SettingsPage::Storage,
+        SettingsPage::About,
+    ];
     for p in all_pages {
         let visible = p == page;
         let controls = state.page_controls(p).clone();
         for h in controls {
-            unsafe { let _ = ShowWindow(h, if visible { SW_SHOW } else { SW_HIDE }); }
+            unsafe {
+                let _ = ShowWindow(h, if visible { SW_SHOW } else { SW_HIDE });
+            }
         }
     }
     set_active_nav(state);
 }
 fn model_profile_hints(name: &str) -> (&'static str, &'static str) {
     let lower = name.to_ascii_lowercase();
-    if lower.contains("tiny") { ("Speed 10/10", "Accuracy 5/10") }
-    else if lower.contains("base") { ("Speed 8/10", "Accuracy 7/10") }
-    else if lower.contains("small") { ("Speed 6/10", "Accuracy 8/10") }
-    else if lower.contains("medium") { ("Speed 4/10", "Accuracy 9/10") }
-    else if lower.contains("large") { ("Speed 2/10", "Accuracy 10/10") }
-    else { ("Speed --", "Accuracy --") }
+    if lower.contains("tiny") {
+        ("Speed 10/10", "Accuracy 5/10")
+    } else if lower.contains("base") {
+        ("Speed 8/10", "Accuracy 7/10")
+    } else if lower.contains("small") {
+        ("Speed 6/10", "Accuracy 8/10")
+    } else if lower.contains("medium") {
+        ("Speed 4/10", "Accuracy 9/10")
+    } else if lower.contains("large") {
+        ("Speed 2/10", "Accuracy 10/10")
+    } else {
+        ("Speed --", "Accuracy --")
+    }
 }
 
 fn populate_model_list(hwnd_list: HWND, params: &SettingsParams) {
@@ -549,13 +1026,23 @@ fn populate_model_list(hwnd_list: HWND, params: &SettingsParams) {
         let models = (params.get_models)();
         if models.is_empty() {
             let s: Vec<u16> = "No models installed\0".encode_utf16().collect();
-            SendMessageW(hwnd_list, LB_ADDSTRING, WPARAM(0), LPARAM(s.as_ptr() as isize));
+            SendMessageW(
+                hwnd_list,
+                LB_ADDSTRING,
+                WPARAM(0),
+                LPARAM(s.as_ptr() as isize),
+            );
         } else {
             for m in &models {
                 let active = if m.is_active { "  [active]" } else { "" };
                 let label = format!("{}{}{}\0", m.name, m.size_label, active);
                 let wide: Vec<u16> = label.encode_utf16().collect();
-                SendMessageW(hwnd_list, LB_ADDSTRING, WPARAM(0), LPARAM(wide.as_ptr() as isize));
+                SendMessageW(
+                    hwnd_list,
+                    LB_ADDSTRING,
+                    WPARAM(0),
+                    LPARAM(wide.as_ptr() as isize),
+                );
             }
         }
     }
@@ -563,13 +1050,23 @@ fn populate_model_list(hwnd_list: HWND, params: &SettingsParams) {
 
 fn populate_download_list(state: &WindowState) {
     unsafe {
-        SendMessageW(state.hwnd_download_list, LB_RESETCONTENT, WPARAM(0), LPARAM(0));
+        SendMessageW(
+            state.hwnd_download_list,
+            LB_RESETCONTENT,
+            WPARAM(0),
+            LPARAM(0),
+        );
         for m in crate::model_downloader::get_downloadable_models() {
             let installed = state.params.shared_models_dir.join(&m.filename).exists();
             let marker = if installed { "  [installed]" } else { "" };
             let label = format!("{}  |  {} MB{}\0", m.name, m.size_mb, marker);
             let wide: Vec<u16> = label.encode_utf16().collect();
-            SendMessageW(state.hwnd_download_list, LB_ADDSTRING, WPARAM(0), LPARAM(wide.as_ptr() as isize));
+            SendMessageW(
+                state.hwnd_download_list,
+                LB_ADDSTRING,
+                WPARAM(0),
+                LPARAM(wide.as_ptr() as isize),
+            );
         }
     }
 }
@@ -577,36 +1074,66 @@ fn populate_download_list(state: &WindowState) {
 fn populate_model_details(state: &WindowState) {
     let sel = unsafe { SendMessageW(state.hwnd_model_list, LB_GETCURSEL, WPARAM(0), LPARAM(0)).0 };
     if sel < 0 {
-        set_control_text(state.hwnd_model_details, "Select an installed model to view details.");
+        set_control_text(
+            state.hwnd_model_details,
+            "Select an installed model to view details.",
+        );
         return;
     }
     let models = (state.params.get_models)();
-    let Some(m) = models.get(sel as usize) else { return; };
+    let Some(m) = models.get(sel as usize) else {
+        return;
+    };
     let (speed, acc) = model_profile_hints(&m.name);
     let details = format!(
         "Name: {}\r\nSize: {}\r\n{}\r\n{}\r\nBest for: {}",
         m.name,
-        if m.size_label.is_empty() { "unknown".to_string() } else { m.size_label.clone() },
+        if m.size_label.is_empty() {
+            "unknown".to_string()
+        } else {
+            m.size_label.clone()
+        },
         speed,
         acc,
-        if m.is_active { "current dictation model" } else { "manual switch available" }
+        if m.is_active {
+            "current dictation model"
+        } else {
+            "manual switch available"
+        }
     );
     set_control_text(state.hwnd_model_details, &details);
 }
 
 fn populate_download_details(state: &WindowState) {
-    let sel = unsafe { SendMessageW(state.hwnd_download_list, LB_GETCURSEL, WPARAM(0), LPARAM(0)).0 };
+    let sel =
+        unsafe { SendMessageW(state.hwnd_download_list, LB_GETCURSEL, WPARAM(0), LPARAM(0)).0 };
     if sel < 0 {
-        set_control_text(state.hwnd_download_details, "Select a catalog model to view download details.");
+        set_control_text(
+            state.hwnd_download_details,
+            "Select a catalog model to view download details.",
+        );
         return;
     }
-    let Some(m) = crate::model_downloader::get_downloadable_models().into_iter().nth(sel as usize) else { return; };
+    let Some(m) = crate::model_downloader::get_downloadable_models()
+        .into_iter()
+        .nth(sel as usize)
+    else {
+        return;
+    };
     let (speed, acc) = model_profile_hints(&m.name);
     let installed = state.params.shared_models_dir.join(&m.filename).exists();
     let details = format!(
         "Name: {}\r\nFile: {}\r\nSize: {} MB\r\n{}\r\n{}\r\nStatus: {}",
-        m.name, m.filename, m.size_mb, speed, acc,
-        if installed { "already installed" } else { "not installed" }
+        m.name,
+        m.filename,
+        m.size_mb,
+        speed,
+        acc,
+        if installed {
+            "already installed"
+        } else {
+            "not installed"
+        }
     );
     set_control_text(state.hwnd_download_details, &details);
 }
@@ -615,15 +1142,38 @@ fn populate_download_status(state: &mut WindowState) {
     let ds = (state.params.get_download_status)();
     let progress_pos = (ds.progress.clamp(0.0, 1.0) * 100.0).round() as isize;
     unsafe {
-        SendMessageW(state.hwnd_download_progress, PBM_SETPOS, WPARAM(progress_pos as usize), LPARAM(0));
-        let _ = ShowWindow(state.hwnd_download_progress, if ds.active { SW_SHOW } else { SW_HIDE });
+        SendMessageW(
+            state.hwnd_download_progress,
+            PBM_SETPOS,
+            WPARAM(progress_pos as usize),
+            LPARAM(0),
+        );
+        let _ = ShowWindow(
+            state.hwnd_download_progress,
+            if ds.active { SW_SHOW } else { SW_HIDE },
+        );
     }
     let status = if ds.active {
-        let eta = ds.eta_seconds.map(|s| format!("{}s", s)).unwrap_or_else(|| "--".to_string());
-        format!("Downloading {}: {:.0}% ({:.1}/{:.1} MB) | {:.2} MB/s | ETA {}", ds.model_name, ds.progress * 100.0, ds.downloaded_mb, ds.total_mb, ds.speed_mbps, eta)
-    } else if let Some(err) = ds.error { format!("Download error: {}", err) }
-      else if ds.completed { format!("Download complete: {}", ds.model_name) }
-      else { "Download: idle".to_string() };
+        let eta = ds
+            .eta_seconds
+            .map(|s| format!("{}s", s))
+            .unwrap_or_else(|| "--".to_string());
+        format!(
+            "Downloading {}: {:.0}% ({:.1}/{:.1} MB) | {:.2} MB/s | ETA {}",
+            ds.model_name,
+            ds.progress * 100.0,
+            ds.downloaded_mb,
+            ds.total_mb,
+            ds.speed_mbps,
+            eta
+        )
+    } else if let Some(err) = ds.error {
+        format!("Download error: {}", err)
+    } else if ds.completed {
+        format!("Download complete: {}", ds.model_name)
+    } else {
+        "Download: idle".to_string()
+    };
     set_control_text(state.hwnd_download_status, &status);
     if ds.completed && !state.last_download_completed {
         populate_model_list(state.hwnd_model_list, &state.params);
@@ -648,13 +1198,28 @@ fn runtime_recommendation_text(rs: &RuntimeStatus) -> String {
 
 fn populate_runtime_panel(state: &WindowState) {
     let rs = (state.params.get_runtime_status)();
-    set_control_text(state.hwnd_runtime_explain, &runtime_recommendation_text(&rs));
+    set_control_text(
+        state.hwnd_runtime_explain,
+        &runtime_recommendation_text(&rs),
+    );
     let details = format!(
         "Backend: {}\r\nDevice: {}\r\nPreferred model: {}\r\nFallback chain: {}\r\nServer fallback: {}\r\nCloud fallback: {}\r\nLast stage: {}\r\n\r\nHardware summary:\r\n{}",
-        rs.backend, rs.device, rs.preferred_model, rs.fallback_chain,
-        if rs.server_fallback { "enabled" } else { "disabled" },
-        if rs.cloud_fallback { "planned" } else { "disabled" },
-        rs.last_stage, rs.hardware_summary,
+        rs.backend,
+        rs.device,
+        rs.preferred_model,
+        rs.fallback_chain,
+        if rs.server_fallback {
+            "enabled"
+        } else {
+            "disabled"
+        },
+        if rs.cloud_fallback {
+            "planned"
+        } else {
+            "disabled"
+        },
+        rs.last_stage,
+        rs.hardware_summary,
     );
     set_control_text(state.hwnd_runtime_status, &details);
 }
@@ -675,7 +1240,11 @@ fn populate_about_panel(state: &WindowState) {
     let text = format!(
         "Dictator for Windows\r\nVersion: 0.3.x alpha\r\n\r\nHotkey profile:\r\n{}\r\n\r\nHistory: {}\r\n\r\nAll settings are applied instantly.",
         state.params.hotkey_summary,
-        if state.params.history_enabled { "enabled" } else { "disabled" },
+        if state.params.history_enabled {
+            "enabled"
+        } else {
+            "disabled"
+        },
     );
     set_control_text(state.hwnd_about_info, &text);
 }
@@ -694,7 +1263,9 @@ fn handle_command(hwnd: HWND, id: usize, notify: u16, state: &mut WindowState) {
         IDC_MODEL_LIST if notify == CBN_SELCHANGE_U16 => populate_model_details(state),
         IDC_DOWNLOAD_LIST if notify == CBN_SELCHANGE_U16 => populate_download_details(state),
         IDC_BTN_USE_MODEL => {
-            let sel = unsafe { SendMessageW(state.hwnd_model_list, LB_GETCURSEL, WPARAM(0), LPARAM(0)).0 };
+            let sel = unsafe {
+                SendMessageW(state.hwnd_model_list, LB_GETCURSEL, WPARAM(0), LPARAM(0)).0
+            };
             if sel >= 0 {
                 let models = (state.params.get_models)();
                 if let Some(m) = models.get(sel as usize) {
@@ -705,17 +1276,33 @@ fn handle_command(hwnd: HWND, id: usize, notify: u16, state: &mut WindowState) {
             }
         }
         IDC_BTN_DELETE_MODEL => {
-            let sel = unsafe { SendMessageW(state.hwnd_model_list, LB_GETCURSEL, WPARAM(0), LPARAM(0)).0 };
+            let sel = unsafe {
+                SendMessageW(state.hwnd_model_list, LB_GETCURSEL, WPARAM(0), LPARAM(0)).0
+            };
             if sel >= 0 {
                 let models = (state.params.get_models)();
                 if let Some(m) = models.get(sel as usize) {
                     if m.is_active {
-                        unsafe { MessageBoxW(hwnd, w!("Cannot delete active model."), w!("Dictator"), MB_OK | MB_ICONERROR); }
+                        unsafe {
+                            MessageBoxW(
+                                hwnd,
+                                w!("Cannot delete active model."),
+                                w!("Dictator"),
+                                MB_OK | MB_ICONERROR,
+                            );
+                        }
                         return;
                     }
                     unsafe {
-                        let msg: Vec<u16> = format!("Delete {}?\0", m.name).encode_utf16().collect();
-                        if MessageBoxW(hwnd, windows::core::PCWSTR(msg.as_ptr()), w!("Confirm delete"), MB_YESNO | MB_ICONINFORMATION) == IDYES {
+                        let msg: Vec<u16> =
+                            format!("Delete {}?\0", m.name).encode_utf16().collect();
+                        if MessageBoxW(
+                            hwnd,
+                            windows::core::PCWSTR(msg.as_ptr()),
+                            w!("Confirm delete"),
+                            MB_YESNO | MB_ICONINFORMATION,
+                        ) == IDYES
+                        {
                             (state.params.on_delete_model)(m.path.clone());
                             populate_model_list(state.hwnd_model_list, &state.params);
                             populate_download_list(state);
@@ -726,19 +1313,61 @@ fn handle_command(hwnd: HWND, id: usize, notify: u16, state: &mut WindowState) {
             }
         }
         IDC_BTN_DOWNLOAD => {
-            let sel = unsafe { SendMessageW(state.hwnd_download_list, LB_GETCURSEL, WPARAM(0), LPARAM(0)).0 };
-            if sel >= 0 { (state.params.on_download_model)(sel as usize); state.last_download_completed = false; }
+            let sel = unsafe {
+                SendMessageW(state.hwnd_download_list, LB_GETCURSEL, WPARAM(0), LPARAM(0)).0
+            };
+            if sel >= 0 {
+                (state.params.on_download_model)(sel as usize);
+                state.last_download_completed = false;
+            }
         }
-        IDC_BTN_REFRESH_RUNTIME => { populate_runtime_panel(state); populate_storage_panel(state); populate_about_panel(state); }
-        IDC_CMB_INJECTION | IDC_CMB_RUNTIME_MODE if notify == CBN_SELCHANGE_U16 => apply_settings(state),
+        IDC_BTN_REFRESH_RUNTIME => {
+            populate_runtime_panel(state);
+            populate_storage_panel(state);
+            populate_about_panel(state);
+        }
+        IDC_CMB_INJECTION | IDC_CMB_RUNTIME_MODE if notify == CBN_SELCHANGE_U16 => {
+            apply_settings(state)
+        }
         IDC_CHK_LLM => apply_settings(state),
-        IDC_EDIT_OLLAMA_URL | IDC_EDIT_OLLAMA_MODEL | IDC_EDIT_IDLE if notify == EN_KILLFOCUS_U16 => apply_settings(state),
-        IDC_BTN_OPEN_SHARED_MODELS => { let _ = std::process::Command::new("explorer").arg(&state.params.shared_models_dir).spawn(); }
-        IDC_BTN_OPEN_SHARED_STORE => { let _ = std::process::Command::new("notepad").arg(&state.params.shared_store_path).spawn(); }
-        IDC_BTN_OPEN_HISTORY => { let _ = std::process::Command::new("explorer").arg(dirs::data_dir().unwrap_or_else(std::env::temp_dir).join("dictator").join("recordings")).spawn(); }
-        IDC_BTN_OPEN_LOGS => { let _ = std::process::Command::new("explorer").arg(&state.params.log_dir).spawn(); }
-        IDC_BTN_OPEN_CONFIG => { let _ = std::process::Command::new("notepad").arg(&state.params.config_path).spawn(); }
-        IDC_BTN_CLOSE => unsafe { let _ = DestroyWindow(hwnd); },
+        IDC_EDIT_OLLAMA_URL | IDC_EDIT_OLLAMA_MODEL | IDC_EDIT_IDLE
+            if notify == EN_KILLFOCUS_U16 =>
+        {
+            apply_settings(state)
+        }
+        IDC_BTN_OPEN_SHARED_MODELS => {
+            let _ = std::process::Command::new("explorer")
+                .arg(&state.params.shared_models_dir)
+                .spawn();
+        }
+        IDC_BTN_OPEN_SHARED_STORE => {
+            let _ = std::process::Command::new("notepad")
+                .arg(&state.params.shared_store_path)
+                .spawn();
+        }
+        IDC_BTN_OPEN_HISTORY => {
+            let _ = std::process::Command::new("explorer")
+                .arg(
+                    dirs::data_dir()
+                        .unwrap_or_else(std::env::temp_dir)
+                        .join("dictator")
+                        .join("recordings"),
+                )
+                .spawn();
+        }
+        IDC_BTN_OPEN_LOGS => {
+            let _ = std::process::Command::new("explorer")
+                .arg(&state.params.log_dir)
+                .spawn();
+        }
+        IDC_BTN_OPEN_CONFIG => {
+            let _ = std::process::Command::new("notepad")
+                .arg(&state.params.config_path)
+                .spawn();
+        }
+        IDC_BTN_CLOSE => unsafe {
+            let _ = DestroyWindow(hwnd);
+        },
         _ => {}
     }
 }
@@ -752,13 +1381,21 @@ fn collect_settings(state: &WindowState) -> SavedSettings {
         }
     };
     let runtime_mode = unsafe {
-        match SendMessageW(state.hwnd_cmb_runtime_mode, CB_GETCURSEL, WPARAM(0), LPARAM(0)).0 {
+        match SendMessageW(
+            state.hwnd_cmb_runtime_mode,
+            CB_GETCURSEL,
+            WPARAM(0),
+            LPARAM(0),
+        )
+        .0
+        {
             1 => "force_gpu".to_string(),
             2 => "force_cpu".to_string(),
             _ => "auto".to_string(),
         }
     };
-    let llm_enabled = unsafe { SendMessageW(state.hwnd_chk_llm, BM_GETCHECK, WPARAM(0), LPARAM(0)).0 != 0 };
+    let llm_enabled =
+        unsafe { SendMessageW(state.hwnd_chk_llm, BM_GETCHECK, WPARAM(0), LPARAM(0)).0 != 0 };
     SavedSettings {
         injection_method,
         llm_enabled,
@@ -772,13 +1409,11 @@ fn collect_settings(state: &WindowState) -> SavedSettings {
 fn read_edit(hwnd: HWND) -> String {
     unsafe {
         let len = GetWindowTextLengthW(hwnd);
-        if len == 0 { return String::new(); }
+        if len == 0 {
+            return String::new();
+        }
         let mut buf = vec![0u16; (len + 1) as usize];
         GetWindowTextW(hwnd, &mut buf);
         String::from_utf16_lossy(&buf[..len as usize])
     }
 }
-
-
-
-

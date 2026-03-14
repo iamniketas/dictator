@@ -149,7 +149,9 @@ pub fn detect_hardware_profile(source_app: &str) -> HardwareProfile {
         notes.push(String::from("warning: total RAM detection failed"));
     }
     if cpu.max_clock_mhz.is_none() {
-        notes.push(String::from("note: cpu max clock unavailable (fallback path used)"));
+        notes.push(String::from(
+            "note: cpu max clock unavailable (fallback path used)",
+        ));
     }
     if gpus.is_empty() {
         notes.push(String::from("note: no GPU detected by current probes"));
@@ -631,6 +633,15 @@ fn detect_gpus_linux() -> Vec<GpuInfo> {
             gpus.extend(parse_linux_lshw_display(&raw));
         }
     }
+    if gpus.is_empty() {
+        if let Some(raw) = run_and_trim(vec![
+            String::from("sh"),
+            String::from("-c"),
+            String::from("cat /proc/driver/nvidia/gpus/*/information 2>/dev/null"),
+        ]) {
+            gpus.extend(parse_linux_nvidia_proc_information(&raw));
+        }
+    }
 
     gpus.sort_by(|a, b| a.name.cmp(&b.name));
     gpus.dedup_by(|a, b| a.name.eq_ignore_ascii_case(&b.name));
@@ -670,7 +681,15 @@ fn parse_macos_system_profiler_json(raw: &str) -> Vec<GpuInfo> {
             if name.is_empty() {
                 continue;
             }
-            gpus.push(build_gpu(&name, 0));
+            let mut gpu = build_gpu(&name, 0);
+            if let Some(vram_raw) = item
+                .get("spdisplays_vram")
+                .or_else(|| item.get("spdisplays_vram_shared"))
+                .and_then(|v| v.as_str())
+            {
+                gpu.vram_mb = parse_size_to_mb(vram_raw).unwrap_or(0);
+            }
+            gpus.push(gpu);
         }
     }
     gpus
@@ -679,12 +698,25 @@ fn parse_macos_system_profiler_json(raw: &str) -> Vec<GpuInfo> {
 #[cfg(any(target_os = "macos", test))]
 fn parse_macos_system_profiler_text(raw: &str) -> Vec<GpuInfo> {
     let mut gpus = Vec::new();
+    let mut current_idx: Option<usize> = None;
     for line in raw.lines() {
         let trimmed = line.trim();
         if let Some(rest) = trimmed.strip_prefix("Chipset Model:") {
             let name = rest.trim();
             if !name.is_empty() {
                 gpus.push(build_gpu(name, 0));
+                current_idx = Some(gpus.len().saturating_sub(1));
+            }
+        }
+        let maybe_vram = trimmed
+            .strip_prefix("VRAM (Total):")
+            .or_else(|| trimmed.strip_prefix("VRAM (Dynamic, Max):"))
+            .or_else(|| trimmed.strip_prefix("VRAM (Shared):"));
+        if let Some(rest) = maybe_vram {
+            if let Some(idx) = current_idx {
+                if let Some(vram_mb) = parse_size_to_mb(rest.trim()) {
+                    gpus[idx].vram_mb = vram_mb;
+                }
             }
         }
     }
@@ -745,6 +777,21 @@ fn parse_linux_lshw_display(raw: &str) -> Vec<GpuInfo> {
 }
 
 #[cfg(any(target_os = "linux", test))]
+fn parse_linux_nvidia_proc_information(raw: &str) -> Vec<GpuInfo> {
+    let mut gpus = Vec::new();
+    for line in raw.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("Model:") {
+            let name = rest.trim();
+            if !name.is_empty() {
+                gpus.push(build_gpu(name, 0));
+            }
+        }
+    }
+    gpus
+}
+
+#[cfg(any(target_os = "linux", test))]
 fn compose_lshw_gpu_name(vendor: &Option<String>, product: &Option<String>) -> Option<String> {
     match (vendor, product) {
         (Some(v), Some(p)) if !v.trim().is_empty() && !p.trim().is_empty() => {
@@ -756,7 +803,7 @@ fn compose_lshw_gpu_name(vendor: &Option<String>, product: &Option<String>) -> O
     }
 }
 
-#[cfg(any(target_os = "linux", test))]
+#[cfg(any(target_os = "linux", target_os = "macos", test))]
 fn parse_size_to_mb(raw: &str) -> Option<u64> {
     let lower = raw.trim().to_lowercase();
     let digits: String = lower
@@ -784,10 +831,7 @@ fn parse_vm_stat_pages(raw: &str, field: &str) -> u64 {
     for line in raw.lines() {
         let trimmed = line.trim();
         if trimmed.starts_with(field) {
-            let digits: String = trimmed
-                .chars()
-                .filter(|c| c.is_ascii_digit())
-                .collect();
+            let digits: String = trimmed.chars().filter(|c| c.is_ascii_digit()).collect();
             if let Ok(v) = digits.parse::<u64>() {
                 return v;
             }
@@ -815,8 +859,10 @@ fn build_gpu(name: &str, vram_mb: u64) -> GpuInfo {
 
     let cuda_compatible = matches!(vendor, GpuVendor::Nvidia) && is_probably_cuda_capable(&lower);
     let metal_compatible = matches!(vendor, GpuVendor::Apple);
-    let directml_compatible =
-        matches!(vendor, GpuVendor::Nvidia | GpuVendor::Amd | GpuVendor::Intel);
+    let directml_compatible = matches!(
+        vendor,
+        GpuVendor::Nvidia | GpuVendor::Amd | GpuVendor::Intel
+    );
 
     GpuInfo {
         name: name.to_string(),
@@ -882,7 +928,11 @@ fn os_version_command() -> Vec<String> {
 
 #[cfg(target_os = "linux")]
 fn os_version_command() -> Vec<String> {
-    vec![String::from("sh"), String::from("-c"), String::from("uname -r")]
+    vec![
+        String::from("sh"),
+        String::from("-c"),
+        String::from("uname -r"),
+    ]
 }
 
 #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
@@ -913,12 +963,6 @@ fn run_and_trim(command: Vec<String>) -> Option<String> {
     }
 }
 
-
-
-
-
-
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -941,6 +985,15 @@ mod tests {
     }
 
     #[test]
+    fn fixture_parse_macos_system_profiler_text_with_vram_is_stable() {
+        let raw = include_str!("../tests/fixtures/macos_spdisplays_vram.txt");
+        let gpus = parse_macos_system_profiler_text(raw);
+        assert_eq!(gpus.len(), 2);
+        assert!(gpus.iter().any(|g| g.vram_mb >= 36 * 1024));
+        assert!(gpus.iter().any(|g| g.vram_mb >= 8 * 1024));
+    }
+
+    #[test]
     fn fixture_parse_linux_lspci_is_stable() {
         let raw = include_str!("../tests/fixtures/linux_lspci_gpu.txt");
         let gpus = parse_linux_lspci(raw);
@@ -956,6 +1009,14 @@ mod tests {
         assert_eq!(gpus.len(), 2);
         assert!(gpus.iter().any(|g| g.vram_mb >= 24 * 1024));
         assert!(gpus.iter().any(|g| g.vram_mb >= 12 * 1024));
+    }
+
+    #[test]
+    fn fixture_parse_linux_nvidia_proc_information_is_stable() {
+        let raw = include_str!("../tests/fixtures/linux_nvidia_proc_information.txt");
+        let gpus = parse_linux_nvidia_proc_information(raw);
+        assert_eq!(gpus.len(), 2);
+        assert!(gpus.iter().all(|g| matches!(g.vendor, GpuVendor::Nvidia)));
     }
 
     #[test]
@@ -993,7 +1054,3 @@ mod tests {
         assert!(matches!(tier_l, Tier::Low));
     }
 }
-
-
-
-

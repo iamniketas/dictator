@@ -49,7 +49,9 @@ impl WhisperEngine {
             #[cfg(not(feature = "cuda"))]
             {
                 if use_gpu {
-                    warn!("[ENGINE] GPU requested but binary was built without CUDA; using CPU fallback");
+                    warn!(
+                        "[ENGINE] GPU requested but binary was built without CUDA; using CPU fallback"
+                    );
                 }
             }
             p

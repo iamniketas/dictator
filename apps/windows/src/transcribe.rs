@@ -34,8 +34,7 @@ pub fn transcribe_audio(audio_data: &[f32], language: &str) -> Result<String> {
 
     // Send HTTP request to Whisper server
     info!("Reading WAV file for upload...");
-    let file_bytes = std::fs::read(&audio_path)
-        .context("Failed to read audio file")?;
+    let file_bytes = std::fs::read(&audio_path).context("Failed to read audio file")?;
     info!("Read {} bytes from WAV file", file_bytes.len());
 
     let file_part = reqwest::blocking::multipart::Part::bytes(file_bytes)
@@ -54,7 +53,7 @@ pub fn transcribe_audio(audio_data: &[f32], language: &str) -> Result<String> {
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(timeout_secs))
         .user_agent("curl/7.68.0")
-        .no_proxy()  // CRITICAL: disable system proxy for localhost
+        .no_proxy() // CRITICAL: disable system proxy for localhost
         .build()
         .context("Failed to build HTTP client")?;
 
@@ -70,7 +69,11 @@ pub fn transcribe_audio(audio_data: &[f32], language: &str) -> Result<String> {
             // Keep audio file for debugging on error
             let backup_path = audio_path.with_extension("wav.failed");
             let _ = std::fs::rename(&audio_path, &backup_path);
-            anyhow::bail!("Failed to send HTTP request to Whisper server: {} (audio saved to {:?})", e, backup_path);
+            anyhow::bail!(
+                "Failed to send HTTP request to Whisper server: {} (audio saved to {:?})",
+                e,
+                backup_path
+            );
         }
     };
 
@@ -82,15 +85,15 @@ pub fn transcribe_audio(audio_data: &[f32], language: &str) -> Result<String> {
         let backup_path = audio_path.with_extension("wav.failed");
         let _ = std::fs::rename(&audio_path, &backup_path);
         warn!("Audio file preserved at: {:?}", backup_path);
-        let error_text = response.text().unwrap_or_else(|_| "Unknown error".to_string());
+        let error_text = response
+            .text()
+            .unwrap_or_else(|_| "Unknown error".to_string());
         warn!("Response body: {}", error_text);
         anyhow::bail!("Whisper server returned {}: {}", status, error_text);
     }
 
     // Parse JSON response
-    let json: serde_json::Value = response
-        .json()
-        .context("Failed to parse JSON response")?;
+    let json: serde_json::Value = response.json().context("Failed to parse JSON response")?;
 
     let result = json["text"]
         .as_str()
@@ -183,7 +186,10 @@ pub async fn transcribe_audio_async(audio_data: &[f32], language: &str) -> Resul
 
     // Dynamic timeout: at least 60s, or 1.5x audio duration
     let timeout_secs = (60.0 + duration_secs * 1.5) as u64;
-    info!("HTTP client timeout set to {} seconds (async)", timeout_secs);
+    info!(
+        "HTTP client timeout set to {} seconds (async)",
+        timeout_secs
+    );
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(timeout_secs))
@@ -204,7 +210,11 @@ pub async fn transcribe_audio_async(audio_data: &[f32], language: &str) -> Resul
         Err(e) => {
             let backup_path = audio_path.with_extension("wav.failed");
             let _ = tokio::fs::rename(&audio_path, &backup_path).await;
-            anyhow::bail!("Failed to send HTTP request to Whisper server: {} (audio saved to {:?})", e, backup_path);
+            anyhow::bail!(
+                "Failed to send HTTP request to Whisper server: {} (audio saved to {:?})",
+                e,
+                backup_path
+            );
         }
     };
 
@@ -215,7 +225,10 @@ pub async fn transcribe_audio_async(audio_data: &[f32], language: &str) -> Resul
         let backup_path = audio_path.with_extension("wav.failed");
         let _ = tokio::fs::rename(&audio_path, &backup_path).await;
         warn!("Audio file preserved at: {:?}", backup_path);
-        let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+        let error_text = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "Unknown error".to_string());
         warn!("Response body: {}", error_text);
         anyhow::bail!("Whisper server returned {}: {}", status, error_text);
     }

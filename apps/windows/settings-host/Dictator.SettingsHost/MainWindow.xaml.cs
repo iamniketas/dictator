@@ -9,6 +9,7 @@ using System.Net.Http.Headers;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.UI;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
@@ -25,6 +26,7 @@ public sealed partial class MainWindow : Window
 
     private readonly string _configPath;
     private string _modelsDir;
+    private readonly string _storePath;
     private string _audioHistoryDir;
     private string _transcriptsDir;
     private readonly bool _startInOnboarding;
@@ -46,7 +48,7 @@ public sealed partial class MainWindow : Window
 
         SetCurrentProcessExplicitAppUserModelID("Dictator.SettingsHost");
 
-        (_configPath, _modelsDir, _, var historyRoot, _startInOnboarding) = ParseArgs();
+        (_configPath, _modelsDir, _storePath, var historyRoot, _startInOnboarding) = ParseArgs();
         _audioHistoryDir = Path.Combine(historyRoot, "audio");
         _transcriptsDir = Path.Combine(historyRoot, "transcripts");
         LoadStorageConfig();
@@ -81,7 +83,7 @@ public sealed partial class MainWindow : Window
         return (
             GetValue("--config", Path.Combine(local, "dictator", "config.toml")),
             GetValue("--models-dir", Path.Combine(local, "AudioModels")),
-            GetValue("--store-path", Path.Combine(local, "AudioModels", "model_store.json")),
+            GetValue("--store-path", Path.Combine(local, "AudioModels", "shared_model_store.v1.json")),
             GetValue("--history-dir", Path.Combine(docs, "Dictator", "History")),
             onboarding
         );
@@ -161,6 +163,7 @@ public sealed partial class MainWindow : Window
         RefreshHardwareDiagnostics();
         RefreshWelcomeSummary();
         RefreshDictationGuidance();
+        SyncSharedModelStore();
 
         AboutText.Text = "Dictator Settings Host (WinUI 3). Changes are applied immediately.";
     }
@@ -249,6 +252,11 @@ public sealed partial class MainWindow : Window
     {
         var activePath = NormalizePath(GetTomlString("whisper", "model_path") ?? string.Empty);
         var backend = (GetTomlString("whisper", "backend") ?? string.Empty).Trim();
+        var store = LoadStoreSnapshot();
+        var storeById = store?.InstalledModels
+            .GroupBy(m => m.Id, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase)
+            ?? new Dictionary<string, StoreModelDoc>(StringComparer.OrdinalIgnoreCase);
         var existing = _catalogModels.ToDictionary(m => m.Id, StringComparer.OrdinalIgnoreCase);
         var ordered = _catalogSource
             .OrderByDescending(m => m.CanDownload)
@@ -266,26 +274,41 @@ public sealed partial class MainWindow : Window
             bool installed;
             bool active;
             long size;
-
-            if (source.CanDownload)
+            if (storeById.TryGetValue(source.Id, out var fromStore))
             {
-                installed = !string.IsNullOrWhiteSpace(localPath) && File.Exists(localPath);
-                active = installed && NormalizePath(localPath) == activePath;
-                size = installed ? new FileInfo(localPath).Length : source.SizeBytes;
-            }
-            else if (string.Equals(source.RuntimeId, "server", StringComparison.OrdinalIgnoreCase))
-            {
-                installed = IsRuntimeProfileInstalled(source.Id);
-                var runtimePath = NormalizePath(GetRuntimeProfileModelPath(source) ?? source.ExecutionModelRef);
-                var backendIsServer = string.Equals(backend, "server", StringComparison.OrdinalIgnoreCase);
-                active = installed && backendIsServer && runtimePath == activePath;
-                size = installed ? GetInstalledItemSize(source, localPath) : source.SizeBytes;
+                installed = string.Equals(fromStore.Health, "ok", StringComparison.OrdinalIgnoreCase)
+                    && (!string.IsNullOrWhiteSpace(fromStore.DirectoryPath))
+                    && (Directory.Exists(fromStore.DirectoryPath) || File.Exists(fromStore.DirectoryPath));
+                active = installed && (
+                    fromStore.IsDefault == true ||
+                    (store?.ActiveModelId is not null && source.Id.Equals(store.ActiveModelId, StringComparison.OrdinalIgnoreCase))
+                );
+                size = (fromStore.SizeBytes ?? 0) > 0
+                    ? fromStore.SizeBytes!.Value
+                    : GetInstalledItemSize(source, localPath);
             }
             else
             {
-                installed = false;
-                active = false;
-                size = source.SizeBytes;
+                if (source.CanDownload)
+                {
+                    installed = !string.IsNullOrWhiteSpace(localPath) && File.Exists(localPath);
+                    active = installed && NormalizePath(localPath) == activePath;
+                    size = installed ? new FileInfo(localPath).Length : source.SizeBytes;
+                }
+                else if (string.Equals(source.RuntimeId, "server", StringComparison.OrdinalIgnoreCase))
+                {
+                    installed = IsRuntimeProfileInstalled(source.Id);
+                    var runtimePath = NormalizePath(GetRuntimeProfileModelPath(source) ?? source.ExecutionModelRef);
+                    var backendIsServer = string.Equals(backend, "server", StringComparison.OrdinalIgnoreCase);
+                    active = installed && backendIsServer && runtimePath == activePath;
+                    size = installed ? GetInstalledItemSize(source, localPath) : source.SizeBytes;
+                }
+                else
+                {
+                    installed = false;
+                    active = false;
+                    size = source.SizeBytes;
+                }
             }
 
             if (!existing.TryGetValue(source.Id, out var vm))
@@ -477,6 +500,7 @@ public sealed partial class MainWindow : Window
             RuntimeSummary.Text = $"Selected {model.Name} (local).";
         }
 
+        SyncSharedModelStore();
         LoadCatalog();
     }
 
@@ -597,6 +621,7 @@ public sealed partial class MainWindow : Window
                 }
             }
 
+            SyncSharedModelStore();
             LoadCatalog();
         }
         catch
@@ -690,6 +715,7 @@ public sealed partial class MainWindow : Window
             }
             cts.Dispose();
 
+            SyncSharedModelStore();
             LoadCatalog();
         }
     }
@@ -955,6 +981,7 @@ public sealed partial class MainWindow : Window
         model.DownloadProgress = 100;
         model.DownloadStatusText = "Runtime installed.";
         model.IsInstalled = true;
+        SyncSharedModelStore();
     }
 
     private static string? FindWhisperServerRequirementsPath()
@@ -1234,6 +1261,157 @@ public sealed partial class MainWindow : Window
 
     private static string NormalizePath(string path) => path.Replace('/', '\\').Trim().ToLowerInvariant();
 
+    private SharedModelStoreDoc? LoadStoreSnapshot()
+    {
+        try
+        {
+            if (!File.Exists(_storePath)) return null;
+            var raw = File.ReadAllText(_storePath);
+            return JsonSerializer.Deserialize<SharedModelStoreDoc>(raw, new JsonSerializerOptions
+            {
+                PropertyNameCaseInsensitive = true
+            });
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private void SyncSharedModelStore()
+    {
+        try
+        {
+            var backend = (GetTomlString("whisper", "backend") ?? "embedded").Trim();
+            var activePath = NormalizePath(GetTomlString("whisper", "model_path") ?? string.Empty);
+            var serverRuntimeRoot = Path.Combine(_modelsDir, "runtimes", "python-asr");
+            var existingStore = LoadStoreSnapshot() ?? new SharedModelStoreDoc();
+            var managedRuntimeIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                "embedded_whisper_rs",
+                "server_python_asr"
+            };
+
+            var store = new SharedModelStoreDoc
+            {
+                SchemaVersion = "shared_model_store.v1",
+                StoreVersion = Math.Max(existingStore.StoreVersion, 1),
+                ModelsRootPath = _modelsDir,
+                ActiveRuntimeId = string.Equals(backend, "server", StringComparison.OrdinalIgnoreCase)
+                    ? "server_python_asr"
+                    : "embedded_whisper_rs",
+                ActiveModelId = null,
+                UpdatedAt = DateTimeOffset.UtcNow.ToString("O"),
+                UpdatedBy = "dictator",
+                InstalledRuntimes = existingStore.InstalledRuntimes
+                    .Where(r => !managedRuntimeIds.Contains(r.Id))
+                    .ToList(),
+                InstalledModels = existingStore.InstalledModels
+                    .Where(m => !managedRuntimeIds.Contains(m.RuntimeId))
+                    .ToList()
+            };
+
+            store.InstalledRuntimes.Add(new StoreRuntimeDoc
+            {
+                Id = "embedded_whisper_rs",
+                DisplayName = "Embedded whisper-rs",
+                Kind = "whisper_rs",
+                EntryPath = _modelsDir,
+                DiskUsageBytes = ComputeDirectorySize(_modelsDir),
+            });
+
+            if (Directory.Exists(serverRuntimeRoot))
+            {
+                store.InstalledRuntimes.Add(new StoreRuntimeDoc
+                {
+                    Id = "server_python_asr",
+                    DisplayName = "Server Python ASR",
+                    Kind = "faster_whisper",
+                    EntryPath = serverRuntimeRoot,
+                    DiskUsageBytes = ComputeDirectorySize(serverRuntimeRoot),
+                });
+            }
+
+            foreach (var source in _catalogSource)
+            {
+                if (string.Equals(source.RuntimeId, "cloud", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                if (source.CanDownload)
+                {
+                    var localPath = Path.Combine(_modelsDir, source.FileName);
+                    if (!File.Exists(localPath))
+                    {
+                        continue;
+                    }
+                    var localPathNorm = NormalizePath(localPath);
+                    var isDefault = !string.Equals(backend, "server", StringComparison.OrdinalIgnoreCase)
+                        && localPathNorm == activePath;
+                    if (isDefault)
+                    {
+                        store.ActiveModelId = source.Id;
+                    }
+                    store.InstalledModels.Add(new StoreModelDoc
+                    {
+                        Id = source.Id,
+                        RuntimeId = "embedded_whisper_rs",
+                        DirectoryPath = localPath,
+                        SizeBytes = new FileInfo(localPath).Length,
+                        IsDefault = isDefault,
+                        Health = "ok",
+                        RequiredFiles = new List<string> { source.FileName }
+                    });
+                    continue;
+                }
+
+                if (string.Equals(source.RuntimeId, "server", StringComparison.OrdinalIgnoreCase))
+                {
+                    var runtimePath = GetRuntimeProfileModelPath(source);
+                    if (string.IsNullOrWhiteSpace(runtimePath) || (!Directory.Exists(runtimePath) && !File.Exists(runtimePath)))
+                    {
+                        continue;
+                    }
+                    var runtimePathNorm = NormalizePath(runtimePath);
+                    var isDefault = string.Equals(backend, "server", StringComparison.OrdinalIgnoreCase)
+                        && runtimePathNorm == activePath;
+                    if (isDefault)
+                    {
+                        store.ActiveModelId = source.Id;
+                    }
+                    store.InstalledModels.Add(new StoreModelDoc
+                    {
+                        Id = source.Id,
+                        RuntimeId = "server_python_asr",
+                        DirectoryPath = runtimePath,
+                        SizeBytes = Directory.Exists(runtimePath)
+                            ? ComputeDirectorySize(runtimePath)
+                            : new FileInfo(runtimePath).Length,
+                        IsDefault = isDefault,
+                        Health = "ok",
+                    });
+                }
+            }
+
+            var parentDir = Path.GetDirectoryName(_storePath);
+            if (!string.IsNullOrWhiteSpace(parentDir))
+            {
+                Directory.CreateDirectory(parentDir);
+            }
+
+            var json = JsonSerializer.Serialize(store, new JsonSerializerOptions
+            {
+                WriteIndented = true,
+                DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+            });
+            File.WriteAllText(_storePath, json);
+        }
+        catch
+        {
+        }
+    }
+
     private static long ComputeDirectorySize(string directory)
     {
         try
@@ -1302,6 +1480,85 @@ public sealed partial class MainWindow : Window
         public string PythonPath { get; set; } = string.Empty;
         public DateTime InstalledAtUtc { get; set; }
     }
+
+    private sealed class SharedModelStoreDoc
+    {
+        [JsonPropertyName("schema_version")]
+        public string SchemaVersion { get; set; } = "shared_model_store.v1";
+
+        [JsonPropertyName("store_version")]
+        public int StoreVersion { get; set; } = 1;
+
+        [JsonPropertyName("models_root_path")]
+        public string ModelsRootPath { get; set; } = string.Empty;
+
+        [JsonPropertyName("active_runtime_id")]
+        public string? ActiveRuntimeId { get; set; }
+
+        [JsonPropertyName("active_model_id")]
+        public string? ActiveModelId { get; set; }
+
+        [JsonPropertyName("updated_at")]
+        public string? UpdatedAt { get; set; }
+
+        [JsonPropertyName("updated_by")]
+        public string UpdatedBy { get; set; } = "dictator";
+
+        [JsonPropertyName("installed_runtimes")]
+        public List<StoreRuntimeDoc> InstalledRuntimes { get; set; } = new();
+
+        [JsonPropertyName("installed_models")]
+        public List<StoreModelDoc> InstalledModels { get; set; } = new();
+    }
+
+    private sealed class StoreRuntimeDoc
+    {
+        [JsonPropertyName("id")]
+        public string Id { get; set; } = string.Empty;
+
+        [JsonPropertyName("display_name")]
+        public string DisplayName { get; set; } = string.Empty;
+
+        [JsonPropertyName("kind")]
+        public string Kind { get; set; } = string.Empty;
+
+        [JsonPropertyName("version")]
+        public string? Version { get; set; }
+
+        [JsonPropertyName("entry_path")]
+        public string EntryPath { get; set; } = string.Empty;
+
+        [JsonPropertyName("disk_usage_bytes")]
+        public long? DiskUsageBytes { get; set; }
+    }
+
+    private sealed class StoreModelDoc
+    {
+        [JsonPropertyName("id")]
+        public string Id { get; set; } = string.Empty;
+
+        [JsonPropertyName("runtime_id")]
+        public string RuntimeId { get; set; } = string.Empty;
+
+        [JsonPropertyName("directory_path")]
+        public string DirectoryPath { get; set; } = string.Empty;
+
+        [JsonPropertyName("size_bytes")]
+        public long? SizeBytes { get; set; }
+
+        [JsonPropertyName("is_default")]
+        public bool? IsDefault { get; set; }
+
+        [JsonPropertyName("health")]
+        public string Health { get; set; } = "unknown";
+
+        [JsonPropertyName("required_files")]
+        public List<string>? RequiredFiles { get; set; }
+
+        [JsonPropertyName("registered_at")]
+        public string? RegisteredAt { get; set; }
+    }
+
     public sealed class CatalogModelItem : INotifyPropertyChanged
     {
         private bool _isInstalled;

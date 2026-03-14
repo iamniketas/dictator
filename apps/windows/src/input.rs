@@ -1,14 +1,14 @@
 //! Input module - Global hotkeys and text injection
 
-use std::sync::{mpsc, Mutex};
+use std::sync::{Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 use tracing::{error, info};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, DispatchMessageW, GetForegroundWindow, GetMessageW, SetForegroundWindow,
-    SetWindowsHookExW, ShowWindow, TranslateMessage, UnhookWindowsHookEx, KBDLLHOOKSTRUCT,
-    LLKHF_UP, MSG, SW_RESTORE, WH_KEYBOARD_LL,
+    CallNextHookEx, DispatchMessageW, GetForegroundWindow, GetMessageW, KBDLLHOOKSTRUCT, LLKHF_UP,
+    MSG, SW_RESTORE, SetForegroundWindow, SetWindowsHookExW, ShowWindow, TranslateMessage,
+    UnhookWindowsHookEx, WH_KEYBOARD_LL,
 };
 
 /// Hold duration threshold: above = Push-to-Talk, below = Toggle
@@ -35,8 +35,12 @@ static HOTKEY_LISTENER: Mutex<HotkeyListenerState> = Mutex::new(HotkeyListenerSt
 /// Uses isize to store HWND value (HWND is not Send-safe due to *mut c_void)
 #[derive(Debug, Clone)]
 pub enum HotkeyEvent {
-    RecordStart { hwnd: isize },
-    RecordStop { hwnd: isize },
+    RecordStart {
+        hwnd: isize,
+    },
+    RecordStop {
+        hwnd: isize,
+    },
     /// Sent by CLI --toggle: toggle recording state
     RemoteToggle,
     /// Sent by CLI --stop: stop recording if active
@@ -109,11 +113,7 @@ pub fn start_hotkey_listener(tx: mpsc::Sender<HotkeyEvent>) -> thread::JoinHandl
     })
 }
 
-unsafe extern "system" fn ll_keyboard_hook(
-    code: i32,
-    wparam: WPARAM,
-    lparam: LPARAM,
-) -> LRESULT {
+unsafe extern "system" fn ll_keyboard_hook(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     if code >= 0 {
         let kb = unsafe { &*(lparam.0 as *const KBDLLHOOKSTRUCT) };
         if process_hotkey_event(kb.vkCode, (kb.flags.0 & LLKHF_UP.0) != 0) {
@@ -171,7 +171,10 @@ fn process_hotkey_event(vk: u32, is_key_up: bool) -> bool {
             } else {
                 // Short tap: switch to toggle mode, keep recording
                 state.is_toggle_recording = true;
-                info!("[HOTKEY] Toggle mode active (tapped {}ms)", elapsed.as_millis());
+                info!(
+                    "[HOTKEY] Toggle mode active (tapped {}ms)",
+                    elapsed.as_millis()
+                );
             }
         }
     }
@@ -217,7 +220,7 @@ pub fn inject_text(text: &str, method: &crate::config::InjectionMethod) -> anyho
 /// If `send_enter` is true, sends Enter key after paste
 fn inject_text_via_clipboard(text: &str, send_enter: bool) -> anyhow::Result<()> {
     use windows::Win32::UI::Input::KeyboardAndMouse::{
-        SendInput, INPUT, INPUT_0, KEYBDINPUT, KEYEVENTF_KEYUP,
+        INPUT, INPUT_0, KEYBDINPUT, KEYEVENTF_KEYUP, SendInput,
     };
 
     // Save current clipboard content
@@ -289,7 +292,10 @@ fn inject_text_via_clipboard(text: &str, send_enter: bool) -> anyhow::Result<()>
     unsafe {
         let sent = SendInput(&ctrl_v_inputs, std::mem::size_of::<INPUT>() as i32);
         if sent != 4 {
-            return Err(anyhow::anyhow!("SendInput failed for Ctrl+V: sent {} of 4 events", sent));
+            return Err(anyhow::anyhow!(
+                "SendInput failed for Ctrl+V: sent {} of 4 events",
+                sent
+            ));
         }
     }
 
@@ -341,7 +347,7 @@ fn inject_text_via_clipboard(text: &str, send_enter: bool) -> anyhow::Result<()>
 /// Inject text using Unicode input - reliable for small texts
 fn inject_text_via_unicode_input(text: &str) -> anyhow::Result<()> {
     use windows::Win32::UI::Input::KeyboardAndMouse::{
-        SendInput, INPUT, INPUT_0, KEYBDINPUT, KEYEVENTF_KEYUP, KEYEVENTF_UNICODE,
+        INPUT, INPUT_0, KEYBDINPUT, KEYEVENTF_KEYUP, KEYEVENTF_UNICODE, SendInput,
     };
 
     let utf16_chars: Vec<u16> = text.encode_utf16().collect();

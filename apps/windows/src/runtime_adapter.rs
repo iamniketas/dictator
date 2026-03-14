@@ -104,7 +104,12 @@ pub fn plan_runtime_policy(
         ),
         Tier::Medium => (
             ModelProfile::Balanced,
-            vec!["ggml-medium.bin", "ggml-small.bin", "ggml-base.bin", "ggml-tiny.bin"],
+            vec![
+                "ggml-medium.bin",
+                "ggml-small.bin",
+                "ggml-base.bin",
+                "ggml-tiny.bin",
+            ],
             "tier=medium -> prioritize balance",
         ),
         Tier::Low | Tier::Unknown => (
@@ -149,8 +154,11 @@ pub fn plan_runtime_policy(
         candidates.insert(0, configured);
     }
 
-    let mut preferred_model =
-        select_preferred_model(&candidates, installed_model_filenames, catalog_model_filenames);
+    let mut preferred_model = select_preferred_model(
+        &candidates,
+        installed_model_filenames,
+        catalog_model_filenames,
+    );
     let mut backend = WhisperBackend::Embedded;
 
     let mut fallback_models = Vec::new();
@@ -202,8 +210,9 @@ pub fn plan_runtime_policy(
     if matches!(runtime_preference, RuntimePreference::ForceGpu)
         && matches!(device, DevicePreference::Cpu)
     {
-        reasons
-            .push("force_gpu requested but no compatible accelerator detected; using cpu".to_string());
+        reasons.push(
+            "force_gpu requested but no compatible accelerator detected; using cpu".to_string(),
+        );
     }
 
     if let Some(configured) = configured_model_ref {
@@ -361,7 +370,10 @@ mod tests {
     fn prefers_installed_model_from_candidates() {
         let profile = profile_with_tier(Tier::High, true);
         let installed = vec!["ggml-medium.bin".to_string()];
-        let catalog = vec!["ggml-large-v3.bin".to_string(), "ggml-medium.bin".to_string()];
+        let catalog = vec![
+            "ggml-large-v3.bin".to_string(),
+            "ggml-medium.bin".to_string(),
+        ];
 
         let policy = plan_runtime_policy(
             &profile,

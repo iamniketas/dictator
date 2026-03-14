@@ -1,25 +1,26 @@
 //! UI module - System tray and overlay windows
 
 use anyhow::Result;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::PathBuf;
-use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use windows::core::w;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::Graphics::Gdi::HBRUSH;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Shell::{
-    Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_SETVERSION,
-    NOTIFYICON_VERSION_4, NOTIFYICONDATAW,
+    NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_SETVERSION, NOTIFYICON_VERSION_4,
+    NOTIFYICONDATAW, Shell_NotifyIconW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DispatchMessageW,
-    GetCursorPos, GetMessageW, LoadIconW, LoadImageW, MessageBoxW, PostMessageW, PostQuitMessage,
-    RegisterClassW, SetForegroundWindow, TrackPopupMenu, CS_HREDRAW, CS_VREDRAW, IDI_APPLICATION,
-    IMAGE_ICON, LR_LOADFROMFILE, MB_ICONINFORMATION, MB_OK, MF_CHECKED, MF_GRAYED, MF_SEPARATOR,
-    MENU_ITEM_FLAGS, MF_STRING, MF_UNCHECKED, MSG, TPM_BOTTOMALIGN, TPM_LEFTALIGN, WM_COMMAND, WM_CONTEXTMENU, WM_DESTROY, WM_NULL,
-    WM_RBUTTONDOWN, WM_RBUTTONUP, WM_USER, WNDCLASSW, WS_OVERLAPPEDWINDOW,
+    AppendMenuW, CS_HREDRAW, CS_VREDRAW, CreatePopupMenu, CreateWindowExW, DefWindowProcW,
+    DestroyMenu, DispatchMessageW, GetCursorPos, GetMessageW, IDI_APPLICATION, IMAGE_ICON,
+    LR_LOADFROMFILE, LoadIconW, LoadImageW, MB_ICONINFORMATION, MB_OK, MENU_ITEM_FLAGS, MF_CHECKED,
+    MF_GRAYED, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MSG, MessageBoxW, PostMessageW,
+    PostQuitMessage, RegisterClassW, SetForegroundWindow, TPM_BOTTOMALIGN, TPM_LEFTALIGN,
+    TrackPopupMenu, WM_COMMAND, WM_CONTEXTMENU, WM_DESTROY, WM_NULL, WM_RBUTTONDOWN, WM_RBUTTONUP,
+    WM_USER, WNDCLASSW, WS_OVERLAPPEDWINDOW,
 };
+use windows::core::w;
 
 const WM_TRAYICON: u32 = WM_USER + 1;
 const ID_EXIT: u16 = 1001;
@@ -47,32 +48,46 @@ static STREAMING_CHUNK_SECONDS: AtomicU64 = AtomicU64::new(15);
 static OLLAMA_ENABLED: AtomicBool = AtomicBool::new(false);
 static IS_DOWNLOADING: AtomicBool = AtomicBool::new(false);
 static UPDATE_AVAILABLE_VERSION: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
-static INSTALL_UPDATE_CALLBACK: std::sync::Mutex<Option<Box<dyn Fn() + Send + 'static>>> = std::sync::Mutex::new(None);
+static INSTALL_UPDATE_CALLBACK: std::sync::Mutex<Option<Box<dyn Fn() + Send + 'static>>> =
+    std::sync::Mutex::new(None);
 
 // History callbacks
-static HISTORY_OPEN_CALLBACK: std::sync::Mutex<Option<Box<dyn Fn() + Send + 'static>>> = std::sync::Mutex::new(None);
-static HISTORY_COPY_CALLBACK: std::sync::Mutex<Option<Box<dyn Fn(usize) + Send + 'static>>> = std::sync::Mutex::new(None);
-static HISTORY_GET_ENTRIES_CALLBACK: std::sync::Mutex<Option<Box<dyn Fn() -> Vec<HistoryMenuEntry> + Send + 'static>>> = std::sync::Mutex::new(None);
+static HISTORY_OPEN_CALLBACK: std::sync::Mutex<Option<Box<dyn Fn() + Send + 'static>>> =
+    std::sync::Mutex::new(None);
+static HISTORY_COPY_CALLBACK: std::sync::Mutex<Option<Box<dyn Fn(usize) + Send + 'static>>> =
+    std::sync::Mutex::new(None);
+static HISTORY_GET_ENTRIES_CALLBACK: std::sync::Mutex<
+    Option<Box<dyn Fn() -> Vec<HistoryMenuEntry> + Send + 'static>>,
+> = std::sync::Mutex::new(None);
 
 // Model selector callbacks
-static MODEL_SELECT_CALLBACK: std::sync::Mutex<Option<Box<dyn Fn(usize) + Send + 'static>>> = std::sync::Mutex::new(None);
-static MODEL_GET_LIST_CALLBACK: std::sync::Mutex<Option<Box<dyn Fn() -> Vec<ModelMenuItem> + Send + 'static>>> = std::sync::Mutex::new(None);
+static MODEL_SELECT_CALLBACK: std::sync::Mutex<Option<Box<dyn Fn(usize) + Send + 'static>>> =
+    std::sync::Mutex::new(None);
+static MODEL_GET_LIST_CALLBACK: std::sync::Mutex<
+    Option<Box<dyn Fn() -> Vec<ModelMenuItem> + Send + 'static>>,
+> = std::sync::Mutex::new(None);
 
 // Config open callback
-static OPEN_CONFIG_CALLBACK: std::sync::Mutex<Option<Box<dyn Fn() + Send + 'static>>> = std::sync::Mutex::new(None);
+static OPEN_CONFIG_CALLBACK: std::sync::Mutex<Option<Box<dyn Fn() + Send + 'static>>> =
+    std::sync::Mutex::new(None);
 
 // Download model callbacks
-static DOWNLOAD_MODEL_CALLBACK: std::sync::Mutex<Option<Box<dyn Fn(usize) + Send + 'static>>> = std::sync::Mutex::new(None);
-static DOWNLOAD_LIST_CALLBACK: std::sync::Mutex<Option<Box<dyn Fn() -> Vec<DownloadModelItem> + Send + 'static>>> = std::sync::Mutex::new(None);
+static DOWNLOAD_MODEL_CALLBACK: std::sync::Mutex<Option<Box<dyn Fn(usize) + Send + 'static>>> =
+    std::sync::Mutex::new(None);
+static DOWNLOAD_LIST_CALLBACK: std::sync::Mutex<
+    Option<Box<dyn Fn() -> Vec<DownloadModelItem> + Send + 'static>>,
+> = std::sync::Mutex::new(None);
 
 // Settings window callback
-static SETTINGS_CALLBACK: std::sync::Mutex<Option<Box<dyn Fn() + Send + 'static>>> = std::sync::Mutex::new(None);
-static SETTINGS_WELCOME_CALLBACK: std::sync::Mutex<Option<Box<dyn Fn() + Send + 'static>>> = std::sync::Mutex::new(None);
+static SETTINGS_CALLBACK: std::sync::Mutex<Option<Box<dyn Fn() + Send + 'static>>> =
+    std::sync::Mutex::new(None);
+static SETTINGS_WELCOME_CALLBACK: std::sync::Mutex<Option<Box<dyn Fn() + Send + 'static>>> =
+    std::sync::Mutex::new(None);
 
 /// Entry for history menu
 #[derive(Debug, Clone)]
 pub struct HistoryMenuEntry {
-    pub id: usize,  // 0-based index
+    pub id: usize, // 0-based index
     pub label: String,
 }
 
@@ -373,7 +388,9 @@ unsafe extern "system" fn window_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
-    match catch_unwind(AssertUnwindSafe(|| unsafe { window_proc_impl(hwnd, msg, wparam, lparam) })) {
+    match catch_unwind(AssertUnwindSafe(|| unsafe {
+        window_proc_impl(hwnd, msg, wparam, lparam)
+    })) {
         Ok(result) => result,
         Err(_) => {
             eprintln!("[TRAY] panic in window_proc; ignoring message");
@@ -396,7 +413,10 @@ unsafe fn window_proc_impl(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
     match msg {
         WM_TRAYICON => {
             let tray_event = (lparam.0 as u32) & 0xFFFF;
-            if tray_event == WM_RBUTTONUP || tray_event == WM_RBUTTONDOWN || tray_event == WM_CONTEXTMENU {
+            if tray_event == WM_RBUTTONUP
+                || tray_event == WM_RBUTTONDOWN
+                || tray_event == WM_CONTEXTMENU
+            {
                 show_context_menu(hwnd);
             }
             LRESULT(0)
@@ -409,7 +429,10 @@ unsafe fn window_proc_impl(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
             } else if cmd == ID_STREAMING {
                 let new_state = !STREAMING_ENABLED.load(Ordering::SeqCst);
                 STREAMING_ENABLED.store(new_state, Ordering::SeqCst);
-                eprintln!("[TRAY] Streaming {}", if new_state { "enabled" } else { "disabled" });
+                eprintln!(
+                    "[TRAY] Streaming {}",
+                    if new_state { "enabled" } else { "disabled" }
+                );
             } else if cmd == ID_CHUNK_3 {
                 set_streaming_chunk_seconds(3);
                 eprintln!("[TRAY] Streaming chunk set to 3s");
@@ -445,7 +468,10 @@ unsafe fn window_proc_impl(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
             } else if cmd == ID_OLLAMA {
                 let new_state = !OLLAMA_ENABLED.load(Ordering::SeqCst);
                 OLLAMA_ENABLED.store(new_state, Ordering::SeqCst);
-                eprintln!("[TRAY] Ollama LLM correction {}", if new_state { "enabled" } else { "disabled" });
+                eprintln!(
+                    "[TRAY] Ollama LLM correction {}",
+                    if new_state { "enabled" } else { "disabled" }
+                );
             } else if cmd == ID_OPEN_CONFIG {
                 eprintln!("[TRAY] Opening config file");
                 if let Ok(cb) = OPEN_CONFIG_CALLBACK.lock() {
@@ -487,7 +513,9 @@ unsafe fn window_proc_impl(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
             } else if cmd == ID_ABOUT {
                 let _ = MessageBoxW(
                     hwnd,
-                    w!("Dictator v0.1.0-alpha\r\nVoice dictation for Windows\r\n\r\nHotkey: Right Ctrl\r\n  Hold >300ms \u{2192} Push-to-Talk\r\n  Tap          \u{2192} Toggle mode\r\n\r\nRuns 100% locally. No cloud, no telemetry.\r\n\r\nhttps://github.com/iamniketas/dictator"),
+                    w!(
+                        "Dictator v0.1.0-alpha\r\nVoice dictation for Windows\r\n\r\nHotkey: Right Ctrl\r\n  Hold >300ms \u{2192} Push-to-Talk\r\n  Tap          \u{2192} Toggle mode\r\n\r\nRuns 100% locally. No cloud, no telemetry.\r\n\r\nhttps://github.com/iamniketas/dictator"
+                    ),
                     w!("About Dictator"),
                     MB_OK | MB_ICONINFORMATION,
                 );
@@ -514,7 +542,8 @@ unsafe fn show_context_menu(hwnd: HWND) {
                 let label = format!("\u{2191} Update available (v{}) \u{2014} Install", version);
                 let wide: Vec<u16> = label.encode_utf16().chain(std::iter::once(0)).collect();
                 let _ = AppendMenuW(
-                    menu, MF_STRING,
+                    menu,
+                    MF_STRING,
                     ID_INSTALL_UPDATE as usize,
                     windows::core::PCWSTR(wide.as_ptr()),
                 );
@@ -524,16 +553,29 @@ unsafe fn show_context_menu(hwnd: HWND) {
 
         // ── Model selector (quick switch) ────────────────────────────────────
         let models = if let Ok(cb) = MODEL_GET_LIST_CALLBACK.lock() {
-            if let Some(ref callback) = *cb { callback() } else { Vec::new() }
+            if let Some(ref callback) = *cb {
+                callback()
+            } else {
+                Vec::new()
+            }
         } else {
             Vec::new()
         };
 
         if models.is_empty() {
-            let _ = AppendMenuW(menu, MF_GRAYED | MF_STRING, 0, w!("No models — open Settings"));
+            let _ = AppendMenuW(
+                menu,
+                MF_GRAYED | MF_STRING,
+                0,
+                w!("No models — open Settings"),
+            );
         } else {
             for model in &models {
-                let flag = if model.is_current { MF_CHECKED } else { MF_UNCHECKED };
+                let flag = if model.is_current {
+                    MF_CHECKED
+                } else {
+                    MF_UNCHECKED
+                };
                 let menu_id = ID_MODEL_START + model.index as u16;
                 let display = format!("{}{}", model.name, model.size_label);
                 let wide: Vec<u16> = display.encode_utf16().chain(std::iter::once(0)).collect();
@@ -550,7 +592,11 @@ unsafe fn show_context_menu(hwnd: HWND) {
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
 
         let history_entries = if let Ok(cb) = HISTORY_GET_ENTRIES_CALLBACK.lock() {
-            if let Some(ref callback) = *cb { callback() } else { Vec::new() }
+            if let Some(ref callback) = *cb {
+                callback()
+            } else {
+                Vec::new()
+            }
         } else {
             Vec::new()
         };
@@ -560,8 +606,11 @@ unsafe fn show_context_menu(hwnd: HWND) {
         } else {
             for entry in history_entries.iter().take(3) {
                 let menu_id = ID_HISTORY_START + entry.id as u16;
-                let wide_label: Vec<u16> =
-                    entry.label.encode_utf16().chain(std::iter::once(0)).collect();
+                let wide_label: Vec<u16> = entry
+                    .label
+                    .encode_utf16()
+                    .chain(std::iter::once(0))
+                    .collect();
                 let _ = AppendMenuW(
                     menu,
                     MF_STRING,
@@ -575,7 +624,11 @@ unsafe fn show_context_menu(hwnd: HWND) {
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
         let _ = AppendMenuW(menu, MF_GRAYED | MF_STRING, 0, w!("Dictation Mode"));
         let streaming_enabled = STREAMING_ENABLED.load(Ordering::SeqCst);
-        let streaming_flag = if streaming_enabled { MF_CHECKED } else { MF_UNCHECKED };
+        let streaming_flag = if streaming_enabled {
+            MF_CHECKED
+        } else {
+            MF_UNCHECKED
+        };
         let _ = AppendMenuW(
             menu,
             streaming_flag | MF_STRING,
@@ -583,10 +636,26 @@ unsafe fn show_context_menu(hwnd: HWND) {
             w!("Streaming Transcription"),
         );
         let selected_chunk = STREAMING_CHUNK_SECONDS.load(Ordering::SeqCst);
-        let chunk3_flag = if selected_chunk == 3 { MF_CHECKED } else { MF_UNCHECKED };
-        let chunk8_flag = if selected_chunk == 8 { MF_CHECKED } else { MF_UNCHECKED };
-        let chunk15_flag = if selected_chunk == 15 { MF_CHECKED } else { MF_UNCHECKED };
-        let disabled_if_full = if streaming_enabled { MENU_ITEM_FLAGS(0) } else { MF_GRAYED };
+        let chunk3_flag = if selected_chunk == 3 {
+            MF_CHECKED
+        } else {
+            MF_UNCHECKED
+        };
+        let chunk8_flag = if selected_chunk == 8 {
+            MF_CHECKED
+        } else {
+            MF_UNCHECKED
+        };
+        let chunk15_flag = if selected_chunk == 15 {
+            MF_CHECKED
+        } else {
+            MF_UNCHECKED
+        };
+        let disabled_if_full = if streaming_enabled {
+            MENU_ITEM_FLAGS(0)
+        } else {
+            MF_GRAYED
+        };
         let _ = AppendMenuW(
             menu,
             chunk3_flag | MF_STRING | disabled_if_full,
@@ -608,7 +677,12 @@ unsafe fn show_context_menu(hwnd: HWND) {
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
         let _ = AppendMenuW(menu, MF_GRAYED | MF_STRING, 0, w!("Quick Actions"));
         let _ = AppendMenuW(menu, MF_STRING, ID_SETTINGS as usize, w!("Open Settings"));
-        let _ = AppendMenuW(menu, MF_STRING, ID_WELCOME as usize, w!("Open Welcome Guide"));
+        let _ = AppendMenuW(
+            menu,
+            MF_STRING,
+            ID_WELCOME as usize,
+            w!("Open Welcome Guide"),
+        );
         let _ = AppendMenuW(
             menu,
             MF_STRING,
@@ -622,22 +696,16 @@ unsafe fn show_context_menu(hwnd: HWND) {
         let mut pt = Default::default();
         let _ = GetCursorPos(&mut pt);
         let _ = SetForegroundWindow(hwnd);
-        let _ = TrackPopupMenu(menu, TPM_LEFTALIGN | TPM_BOTTOMALIGN, pt.x, pt.y, 0, hwnd, None);
+        let _ = TrackPopupMenu(
+            menu,
+            TPM_LEFTALIGN | TPM_BOTTOMALIGN,
+            pt.x,
+            pt.y,
+            0,
+            hwnd,
+            None,
+        );
         let _ = PostMessageW(hwnd, WM_NULL, WPARAM(0), LPARAM(0));
         let _ = DestroyMenu(menu);
     }
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-

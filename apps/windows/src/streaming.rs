@@ -6,14 +6,14 @@
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc};
+use std::sync::{Arc, mpsc};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 use tracing::{error, info, warn};
 
 use crate::audio::AudioRecorder;
 use crate::transcribe::transcribe_audio;
-use crate::whisper_engine::{transcribe_with_engine, SharedEngine};
+use crate::whisper_engine::{SharedEngine, transcribe_with_engine};
 
 /// Events from streaming transcription
 #[derive(Debug, Clone)]
@@ -169,7 +169,8 @@ impl StreamingTranscriber {
 
                 tracing::debug!(
                     "[STREAMING] New samples: {} ({:.1}s)",
-                    new_samples, new_seconds
+                    new_samples,
+                    new_seconds
                 );
 
                 // Skip if not enough new data (less than 1 second)
@@ -216,7 +217,13 @@ impl StreamingTranscriber {
 
                 // Send to Whisper (blocking call, but in separate thread)
                 let transcribe_result = match &engine {
-                    Some(eng) => transcribe_with_engine(eng, &model_path, audio_to_process, &language, prefer_gpu),
+                    Some(eng) => transcribe_with_engine(
+                        eng,
+                        &model_path,
+                        audio_to_process,
+                        &language,
+                        prefer_gpu,
+                    ),
                     None => transcribe_audio(audio_to_process, &language),
                 };
                 match transcribe_result {
@@ -261,7 +268,10 @@ impl StreamingTranscriber {
             }
 
             // Send final text
-            info!("[STREAMING] Sending final text ({} chars)", accumulated_text.len());
+            info!(
+                "[STREAMING] Sending final text ({} chars)",
+                accumulated_text.len()
+            );
             let _ = event_tx.send(StreamingEvent::FinalText(accumulated_text));
             info!("[STREAMING] Thread exiting");
         });
@@ -300,10 +310,3 @@ impl Drop for StreamingTranscriber {
         }
     }
 }
-
-
-
-
-
-
-

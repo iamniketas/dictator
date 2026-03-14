@@ -25,7 +25,6 @@ pub struct DownloadableModel {
     pub required_files: Vec<String>,
 }
 
-
 #[derive(Debug, Clone, Copy)]
 pub struct DownloadProgress {
     pub progress: f32,
@@ -39,7 +38,11 @@ const FALLBACK_MODELS: &[(&str, &str, u32)] = &[
     ("whisper-ggml-base", "ggml-base.bin", 74),
     ("whisper-ggml-small", "ggml-small.bin", 244),
     ("whisper-ggml-medium", "ggml-medium.bin", 769),
-    ("whisper-ggml-large-v3-turbo", "ggml-large-v3-turbo.bin", 874),
+    (
+        "whisper-ggml-large-v3-turbo",
+        "ggml-large-v3-turbo.bin",
+        874,
+    ),
     ("whisper-ggml-large-v3", "ggml-large-v3.bin", 1550),
 ];
 
@@ -69,7 +72,9 @@ pub fn get_downloadable_models() -> Vec<DownloadableModel> {
                 .into_iter()
                 .filter(|m| {
                     m.family == "whisper_ggml"
-                        && m.supported_backends.iter().any(|b| b == "embedded_whisper_rs")
+                        && m.supported_backends
+                            .iter()
+                            .any(|b| b == "embedded_whisper_rs")
                 })
                 .filter_map(|m| {
                     let filename = m.download_filename?;
@@ -181,11 +186,14 @@ pub fn download_model(
 
     let mut buf = vec![0u8; 256 * 1024]; // 256 KB chunks
     loop {
-        let n = response.read(&mut buf).context("Read error during download")?;
+        let n = response
+            .read(&mut buf)
+            .context("Read error during download")?;
         if n == 0 {
             break;
         }
-        file.write_all(&buf[..n]).context("Write error during download")?;
+        file.write_all(&buf[..n])
+            .context("Write error during download")?;
         downloaded += n as u64;
         let elapsed = started.elapsed().as_secs_f64().max(0.001);
         let bytes_per_sec = (downloaded as f64 / elapsed) as u64;
@@ -215,7 +223,3 @@ pub fn download_model(
     info!("[DOWNLOAD] Complete: {:?} ({} bytes)", dest, downloaded);
     Ok(dest)
 }
-
-
-
-
