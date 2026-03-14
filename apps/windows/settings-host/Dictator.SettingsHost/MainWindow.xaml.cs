@@ -159,8 +159,72 @@ public sealed partial class MainWindow : Window
         LoadConfigFields();
         RefreshStorageCards();
         RefreshHardwareDiagnostics();
+        RefreshWelcomeSummary();
+        RefreshDictationGuidance();
 
         AboutText.Text = "Dictator Settings Host (WinUI 3). Changes are applied immediately.";
+    }
+
+    private void RefreshWelcomeSummary()
+    {
+        var modelPath = (GetTomlString("whisper", "model_path") ?? string.Empty).Trim();
+        var hasModel = !string.IsNullOrWhiteSpace(modelPath) && (File.Exists(modelPath) || Directory.Exists(modelPath));
+        WelcomeModelStatusText.Text = hasModel
+            ? $"Model: ready ({Path.GetFileName(modelPath)})"
+            : "Model: not configured yet (open Models and install one)";
+
+        var runtimePref = (GetTomlString("runtime", "preference") ?? "auto").Trim();
+        WelcomeRuntimeStatusText.Text = runtimePref switch
+        {
+            "force_gpu" => "Runtime: Force GPU",
+            "force_cpu" => "Runtime: Force CPU",
+            _ => "Runtime: Auto (recommended)",
+        };
+
+        var hotkey = (GetTomlString("hotkey", "key") ?? "right_ctrl").Trim();
+        var hotkeyLabel = hotkey.Replace('_', ' ');
+        WelcomeHotkeyStatusText.Text = $"Hotkey: {hotkeyLabel}";
+    }
+
+    private void RefreshDictationGuidance()
+    {
+        var streaming = StreamingToggle.IsOn;
+        var chunk = (int)Math.Clamp((int)Math.Round(ChunkSecondsBox.Value), 3, 60);
+        var runtime = (RuntimeModeCombo.SelectedItem as ComboBoxItem)?.Tag as string ?? "auto";
+        var injection = (InjectionCombo.SelectedItem as ComboBoxItem)?.Tag as string ?? "direct";
+        var llm = LlmToggle.IsOn;
+        var overlayEnabled = PostOverlayToggle.IsOn;
+        var overlaySecs = (int)Math.Clamp((int)Math.Round(PostOverlaySecondsBox.Value), 1, 15);
+
+        var speedTier = _lastHardwareScore >= 8 ? "high-performance" : _lastHardwareScore >= 5 ? "balanced" : "compatibility-first";
+        DictationProfileSummaryText.Text =
+            $"Current profile: {(streaming ? "Streaming" : "Full transcription")} | Runtime: {runtime} | Hardware: {speedTier}.";
+
+        DictationLatencyHintText.Text = streaming
+            ? $"Latency hint: chunk={chunk}s. Smaller chunks react faster but may reduce stability on long phrases."
+            : "Latency hint: full mode waits for stop, then runs one stable pass with usually better consistency.";
+
+        DictationQualityHintText.Text = llm
+            ? "Quality hint: Ollama correction is ON (better readability, additional post-processing delay)."
+            : "Quality hint: raw ASR output is used directly (faster end-to-end, no cleanup pass).";
+
+        ChunkHintText.Text = chunk switch
+        {
+            <= 4 => "Chunk guidance: aggressive low-latency mode. Best for short commands.",
+            <= 10 => "Chunk guidance: balanced mode. Good for continuous dictation.",
+            _ => "Chunk guidance: quality-biased streaming. Slower updates but more context per chunk."
+        };
+
+        InjectionHintText.Text = injection switch
+        {
+            "clipboard" => "Injection hint: safer compatibility via clipboard paste.",
+            "clipboard_enter" => "Injection hint: clipboard paste + Enter, convenient for chat workflows.",
+            _ => "Injection hint: direct keystroke injection for fastest insertion."
+        };
+
+        OverlayHintText.Text = overlayEnabled
+            ? $"Overlay hint: confirmation panel is visible for {overlaySecs}s after insertion."
+            : "Overlay hint: post-transcription confirmation is disabled for minimal interruption.";
     }
 
     private void SelectNavByTag(string tag)
@@ -240,6 +304,7 @@ public sealed partial class MainWindow : Window
         }
 
         _ = RefreshCatalogSizeHintsAsync();
+        RefreshWelcomeSummary();
     }
 
     private void LoadConfigFields()
@@ -946,6 +1011,8 @@ public sealed partial class MainWindow : Window
             "force_cpu" => "CPU forced. Reliable mode, possibly slower for large models.",
             _ => "Auto mode selected: recommendation follows hardware diagnostics.",
         };
+        RefreshWelcomeSummary();
+        RefreshDictationGuidance();
     }
 
     private void OnInjectionChanged(object sender, SelectionChangedEventArgs e)
@@ -953,12 +1020,15 @@ public sealed partial class MainWindow : Window
         if (!_uiReady) return;
         var selected = (InjectionCombo.SelectedItem as ComboBoxItem)?.Tag as string ?? "direct";
         UpsertTomlValue("injection", "method", QuoteToml(selected));
+        RefreshDictationGuidance();
     }
 
     private void OnStreamingToggled(object sender, RoutedEventArgs e)
     {
         if (!_uiReady) return;
         UpsertTomlValue("streaming", "enabled", StreamingToggle.IsOn ? "true" : "false");
+        RefreshWelcomeSummary();
+        RefreshDictationGuidance();
     }
 
     private void OnChunkValueChanged(NumberBox sender, NumberBoxValueChangedEventArgs args)
@@ -966,18 +1036,21 @@ public sealed partial class MainWindow : Window
         if (!_uiReady) return;
         var value = (uint)Math.Clamp((int)Math.Round(sender.Value), 3, 60);
         UpsertTomlValue("streaming", "poll_interval", value.ToString(CultureInfo.InvariantCulture));
+        RefreshDictationGuidance();
     }
 
     private void OnLlmToggled(object sender, RoutedEventArgs e)
     {
         if (!_uiReady) return;
         UpsertTomlValue("ollama", "enabled", LlmToggle.IsOn ? "true" : "false");
+        RefreshDictationGuidance();
     }
 
     private void OnPostOverlayToggled(object sender, RoutedEventArgs e)
     {
         if (!_uiReady) return;
         UpsertTomlValue("ui", "show_post_transcription_overlay", PostOverlayToggle.IsOn ? "true" : "false");
+        RefreshDictationGuidance();
     }
 
     private void OnPostOverlaySecondsChanged(NumberBox sender, NumberBoxValueChangedEventArgs args)
@@ -985,6 +1058,7 @@ public sealed partial class MainWindow : Window
         if (!_uiReady) return;
         var value = (uint)Math.Clamp((int)Math.Round(sender.Value), 1, 15);
         UpsertTomlValue("ui", "post_transcription_overlay_seconds", value.ToString(CultureInfo.InvariantCulture));
+        RefreshDictationGuidance();
     }
 
     private void OnConfigFieldLostFocus(object sender, RoutedEventArgs e)

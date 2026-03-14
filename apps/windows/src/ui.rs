@@ -17,7 +17,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     GetCursorPos, GetMessageW, LoadIconW, LoadImageW, MessageBoxW, PostMessageW, PostQuitMessage,
     RegisterClassW, SetForegroundWindow, TrackPopupMenu, CS_HREDRAW, CS_VREDRAW, IDI_APPLICATION,
     IMAGE_ICON, LR_LOADFROMFILE, MB_ICONINFORMATION, MB_OK, MF_CHECKED, MF_GRAYED, MF_SEPARATOR,
-    MF_STRING, MF_UNCHECKED, MSG, TPM_BOTTOMALIGN, TPM_LEFTALIGN, WM_COMMAND, WM_CONTEXTMENU, WM_DESTROY, WM_NULL,
+    MENU_ITEM_FLAGS, MF_STRING, MF_UNCHECKED, MSG, TPM_BOTTOMALIGN, TPM_LEFTALIGN, WM_COMMAND, WM_CONTEXTMENU, WM_DESTROY, WM_NULL,
     WM_RBUTTONDOWN, WM_RBUTTONUP, WM_USER, WNDCLASSW, WS_OVERLAPPEDWINDOW,
 };
 
@@ -572,6 +572,39 @@ unsafe fn show_context_menu(hwnd: HWND) {
         }
 
         // ── Actions ──────────────────────────────────────────────────────────
+        let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
+        let _ = AppendMenuW(menu, MF_GRAYED | MF_STRING, 0, w!("Dictation Mode"));
+        let streaming_enabled = STREAMING_ENABLED.load(Ordering::SeqCst);
+        let streaming_flag = if streaming_enabled { MF_CHECKED } else { MF_UNCHECKED };
+        let _ = AppendMenuW(
+            menu,
+            streaming_flag | MF_STRING,
+            ID_STREAMING as usize,
+            w!("Streaming Transcription"),
+        );
+        let selected_chunk = STREAMING_CHUNK_SECONDS.load(Ordering::SeqCst);
+        let chunk3_flag = if selected_chunk == 3 { MF_CHECKED } else { MF_UNCHECKED };
+        let chunk8_flag = if selected_chunk == 8 { MF_CHECKED } else { MF_UNCHECKED };
+        let chunk15_flag = if selected_chunk == 15 { MF_CHECKED } else { MF_UNCHECKED };
+        let disabled_if_full = if streaming_enabled { MENU_ITEM_FLAGS(0) } else { MF_GRAYED };
+        let _ = AppendMenuW(
+            menu,
+            chunk3_flag | MF_STRING | disabled_if_full,
+            ID_CHUNK_3 as usize,
+            w!("Chunk: 3s"),
+        );
+        let _ = AppendMenuW(
+            menu,
+            chunk8_flag | MF_STRING | disabled_if_full,
+            ID_CHUNK_8 as usize,
+            w!("Chunk: 8s"),
+        );
+        let _ = AppendMenuW(
+            menu,
+            chunk15_flag | MF_STRING | disabled_if_full,
+            ID_CHUNK_15 as usize,
+            w!("Chunk: 15s"),
+        );
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
         let _ = AppendMenuW(menu, MF_GRAYED | MF_STRING, 0, w!("Quick Actions"));
         let _ = AppendMenuW(menu, MF_STRING, ID_SETTINGS as usize, w!("Open Settings"));

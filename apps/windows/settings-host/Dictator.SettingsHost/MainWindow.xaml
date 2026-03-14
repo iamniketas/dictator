@@ -64,6 +64,15 @@
                                     <TextBlock Text="Tip: closing this window does not stop Dictator. Use tray icon -> Exit to fully close app." TextWrapping="Wrap" />
                                 </Border>
 
+                                <Border Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="10" Padding="10">
+                                    <StackPanel Spacing="6">
+                                        <TextBlock Text="Current Setup" FontWeight="SemiBold" />
+                                        <TextBlock x:Name="WelcomeModelStatusText" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
+                                        <TextBlock x:Name="WelcomeRuntimeStatusText" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
+                                        <TextBlock x:Name="WelcomeHotkeyStatusText" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
+                                    </StackPanel>
+                                </Border>
+
                                 <StackPanel Orientation="Horizontal" Spacing="8">
                                     <Button Content="Open Models" Click="OnGoToModelsClick" />
                                     <Button Content="Open Runtime" Click="OnGoToRuntimeClick" />
@@ -177,11 +186,22 @@
                     </StackPanel>
 
                     <StackPanel x:Name="DictationPanel" Spacing="14" Visibility="Collapsed">
+                        <Border Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="12" Padding="16">
+                            <StackPanel Spacing="8">
+                                <TextBlock Text="Dictation Profile" FontSize="16" FontWeight="SemiBold" />
+                                <TextBlock x:Name="DictationProfileSummaryText" TextWrapping="Wrap" />
+                                <TextBlock x:Name="DictationLatencyHintText" TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                <TextBlock x:Name="DictationQualityHintText" TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                            </StackPanel>
+                        </Border>
+
                         <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="12" Padding="16">
                             <StackPanel Spacing="12">
                                 <TextBlock Text="Transcription Mode" FontSize="16" FontWeight="SemiBold" />
+                                <TextBlock Text="Choose between lower-latency streaming and higher-stability full transcription." Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
                                 <ToggleSwitch x:Name="StreamingToggle" Header="Enable streaming transcription" Toggled="OnStreamingToggled" />
                                 <NumberBox x:Name="ChunkSecondsBox" Header="Streaming chunk interval (seconds)" Minimum="3" Maximum="60" ValueChanged="OnChunkValueChanged" />
+                                <TextBlock x:Name="ChunkHintText" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
                                 <TextBlock Text="Hotkey: Right Ctrl (hold/tap behavior managed by app runtime)." Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                             </StackPanel>
                         </Border>
@@ -189,17 +209,20 @@
                         <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="12" Padding="16">
                             <StackPanel Spacing="12">
                                 <TextBlock Text="Injection" FontSize="16" FontWeight="SemiBold" />
+                                <TextBlock Text="How recognized text is inserted into the target app." Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
                                 <ComboBox x:Name="InjectionCombo" SelectionChanged="OnInjectionChanged">
                                     <ComboBoxItem Content="Direct (SendInput)" Tag="direct" />
                                     <ComboBoxItem Content="Clipboard (Ctrl+V)" Tag="clipboard" />
                                     <ComboBoxItem Content="Clipboard + Enter" Tag="clipboard_enter" />
                                 </ComboBox>
+                                <TextBlock x:Name="InjectionHintText" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
                             </StackPanel>
                         </Border>
 
                         <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="12" Padding="16">
                             <StackPanel Spacing="12">
                                 <TextBlock Text="Post-processing (Ollama)" FontSize="16" FontWeight="SemiBold" />
+                                <TextBlock Text="Optional text cleanup after transcription. Improves readability, adds latency." Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
                                 <ToggleSwitch x:Name="LlmToggle" Header="Enable Ollama correction" Toggled="OnLlmToggled" />
                                 <TextBox x:Name="OllamaUrlBox" Header="Ollama URL" LostFocus="OnConfigFieldLostFocus" />
                                 <TextBox x:Name="OllamaModelBox" Header="Ollama model" LostFocus="OnConfigFieldLostFocus" />
@@ -210,8 +233,10 @@
                         <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="12" Padding="16">
                             <StackPanel Spacing="12">
                                 <TextBlock Text="Overlay Feedback" FontSize="16" FontWeight="SemiBold" />
+                                <TextBlock Text="Controls post-transcription confirmation panel shown near cursor." Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
                                 <ToggleSwitch x:Name="PostOverlayToggle" Header="Show post-transcription summary overlay" Toggled="OnPostOverlayToggled" />
                                 <NumberBox x:Name="PostOverlaySecondsBox" Header="Summary overlay duration (seconds)" Minimum="1" Maximum="15" ValueChanged="OnPostOverlaySecondsChanged" />
+                                <TextBlock x:Name="OverlayHintText" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
                             </StackPanel>
                         </Border>
                     </StackPanel>
