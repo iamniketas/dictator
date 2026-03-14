@@ -1,4 +1,6 @@
 use anyhow::{Context, Result};
+use serde::Deserialize;
+use std::fs::{self, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
@@ -12,14 +14,19 @@ const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 pub struct WhisperServerManager {
     model_path: String,
+    python_executable: Option<PathBuf>,
+    preferred_device: Option<String>,
     child: Option<Child>,
     owns_process: bool,
 }
 
 impl WhisperServerManager {
     pub fn new(model_path: String) -> Self {
+        let python_executable = resolve_runtime_profile_python(&model_path);
         Self {
             model_path,
+            python_executable,
+            preferred_device: None,
             child: None,
             owns_process: false,
         }
@@ -63,7 +70,12 @@ impl WhisperServerManager {
                 model_arg.unwrap_or("<server-default>")
             );
 
-            let child = spawn_server_process(&script, model_arg)
+            let child = spawn_server_process(
+                &script,
+                model_arg,
+                self.python_executable.as_deref(),
+                self.preferred_device.as_deref(),
+            )
                 .context("Failed to spawn whisper_server.py")?;
             self.child = Some(child);
             self.owns_process = true;
@@ -110,6 +122,11 @@ impl WhisperServerManager {
 
     pub fn set_model_path(&mut self, model_path: String) {
         self.model_path = model_path;
+        self.python_executable = resolve_runtime_profile_python(&self.model_path);
+    }
+
+    pub fn set_preferred_device(&mut self, preferred_device: Option<String>) {
+        self.preferred_device = preferred_device;
     }
 
     pub fn is_server_running(&self) -> bool {
@@ -133,23 +150,53 @@ impl WhisperServerManager {
     }
 }
 
-fn spawn_server_process(script: &Path, model_path: Option<&str>) -> Result<Child> {
+fn spawn_server_process(
+    script: &Path,
+    model_path: Option<&str>,
+    python_executable: Option<&Path>,
+    preferred_device: Option<&str>,
+) -> Result<Child> {
     // On Windows we only use GUI Python launchers to avoid any console flash.
     #[cfg(target_os = "windows")]
-    let candidates = ["pythonw", "pyw"];
+    let mut candidates: Vec<PathBuf> = vec![PathBuf::from("pythonw"), PathBuf::from("pyw")];
     #[cfg(not(target_os = "windows"))]
-    let candidates = ["python3", "python"];
+    let mut candidates: Vec<PathBuf> = vec![PathBuf::from("python3"), PathBuf::from("python")];
+    if let Some(py) = python_executable {
+        candidates.insert(0, py.to_path_buf());
+    }
     let mut last_error: Option<anyhow::Error> = None;
+    let whisper_log = resolve_whisper_server_log_file();
+    let stderr_writer = whisper_log
+        .as_ref()
+        .and_then(|p| OpenOptions::new().create(true).append(true).open(p).ok());
+    let stdout_writer = whisper_log
+        .as_ref()
+        .and_then(|p| OpenOptions::new().create(true).append(true).open(p).ok());
 
     for exe in candidates {
-        let mut cmd = Command::new(exe);
+        let mut cmd = Command::new(&exe);
         cmd.arg(script)
             .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
+            .stdout(
+                stdout_writer
+                    .as_ref()
+                    .and_then(|f| f.try_clone().ok())
+                    .map(Stdio::from)
+                    .unwrap_or(Stdio::null()),
+            )
+            .stderr(
+                stderr_writer
+                    .as_ref()
+                    .and_then(|f| f.try_clone().ok())
+                    .map(Stdio::from)
+                    .unwrap_or(Stdio::null()),
+            );
 
         if let Some(path) = model_path {
             cmd.arg(path);
+        }
+        if let Some(device) = preferred_device {
+            cmd.env("WHISPER_DEVICE", device);
         }
 
         #[cfg(target_os = "windows")]
@@ -160,7 +207,7 @@ fn spawn_server_process(script: &Path, model_path: Option<&str>) -> Result<Child
         match cmd.spawn() {
             Ok(child) => return Ok(child),
             Err(e) => {
-                last_error = Some(anyhow::anyhow!("{}: {}", exe, e));
+                last_error = Some(anyhow::anyhow!("{}: {}", exe.display(), e));
             }
         }
     }
@@ -209,4 +256,54 @@ fn find_server_script() -> Result<PathBuf> {
     }
 
     anyhow::bail!("whisper_server.py not found in expected locations")
+}
+
+#[derive(Debug, Deserialize)]
+struct RuntimeProfileMarker {
+    #[serde(alias = "ModelId", alias = "model_id")]
+    model_id: Option<String>,
+    #[serde(alias = "LocalModelPath", alias = "local_model_path")]
+    local_model_path: Option<String>,
+    #[serde(alias = "PythonPath", alias = "python_path")]
+    python_path: Option<String>,
+}
+
+fn resolve_runtime_profile_python(model_path: &str) -> Option<PathBuf> {
+    let path = Path::new(model_path);
+    let model_id = path
+        .file_name()
+        .and_then(|v| v.to_str())
+        .map(|s| s.to_string())?;
+
+    let profiles_dir = hardware_profiler::default_audio_models_dir()
+        .join("runtimes")
+        .join("profiles");
+    let marker_path = profiles_dir.join(format!("{}.json", model_id));
+    let raw = fs::read_to_string(marker_path).ok()?;
+    let marker = serde_json::from_str::<RuntimeProfileMarker>(&raw).ok()?;
+
+    if let Some(py) = marker.python_path {
+        let py_path = PathBuf::from(py);
+        if py_path.exists() {
+            info!(
+                "[WHISPER] Using runtime profile python for model {}: {}",
+                marker.model_id.as_deref().unwrap_or(&model_id),
+                py_path.display()
+            );
+            return Some(py_path);
+        }
+    }
+    // If marker matches different local path, do not force wrong python.
+    if let Some(local_path) = marker.local_model_path
+        && Path::new(&local_path) != path
+    {
+        return None;
+    }
+    None
+}
+
+fn resolve_whisper_server_log_file() -> Option<PathBuf> {
+    let log_dir = dirs::data_dir()?.join("dictator").join("logs");
+    let _ = fs::create_dir_all(&log_dir);
+    Some(log_dir.join("whisper-server.log"))
 }

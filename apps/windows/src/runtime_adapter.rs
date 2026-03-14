@@ -49,6 +49,8 @@ pub struct RuntimePolicy {
     pub device: DevicePreference,
     pub model_profile: ModelProfile,
     pub preferred_model: String,
+    pub preferred_model_score: f32,
+    pub ranked_models: Vec<(String, f32)>,
     pub fallback_models: Vec<String>,
     pub needs_model_download: bool,
     pub enable_server_fallback: bool,
@@ -59,11 +61,12 @@ pub struct RuntimePolicy {
 impl RuntimePolicy {
     pub fn summary_line(&self) -> String {
         format!(
-            "backend={} device={} profile={} model={} fallbacks=[{}] download_needed={} server_fallback={} cloud_fallback={}",
+            "backend={} device={} profile={} model={} score={:.1} fallbacks=[{}] download_needed={} server_fallback={} cloud_fallback={}",
             backend_to_str(&self.backend),
             self.device.as_str(),
             self.model_profile.as_str(),
             self.preferred_model,
+            self.preferred_model_score,
             self.fallback_models.join(", "),
             self.needs_model_download,
             self.enable_server_fallback,
@@ -154,11 +157,21 @@ pub fn plan_runtime_policy(
         candidates.insert(0, configured);
     }
 
-    let mut preferred_model = select_preferred_model(
+    let ranked_models = rank_candidate_models(
         &candidates,
+        profile,
+        &runtime_preference,
         installed_model_filenames,
         catalog_model_filenames,
     );
+    let mut preferred_model = ranked_models
+        .first()
+        .map(|(name, _)| name.clone())
+        .unwrap_or_else(|| select_preferred_model(&candidates, installed_model_filenames, catalog_model_filenames));
+    let mut preferred_model_score = ranked_models
+        .first()
+        .map(|(_, score)| *score)
+        .unwrap_or(0.0);
     let mut backend = WhisperBackend::Embedded;
 
     let mut fallback_models = Vec::new();
@@ -180,6 +193,7 @@ pub fn plan_runtime_policy(
 
     if let Some(remote_ref) = configured_remote_ref {
         preferred_model = remote_ref.to_string();
+        preferred_model_score = 9.5;
         preferred_installed = true;
         backend = WhisperBackend::Server;
     }
@@ -229,6 +243,15 @@ pub fn plan_runtime_policy(
     if !preferred_installed {
         reasons.push("preferred model is not installed; download recommended".to_string());
     }
+    reasons.push(format!(
+        "ranked model suitability: {}",
+        ranked_models
+            .iter()
+            .take(4)
+            .map(|(m, s)| format!("{}:{:.1}", m, s))
+            .collect::<Vec<_>>()
+            .join(", ")
+    ));
 
     let enable_server_fallback = matches!(profile.tier, Tier::Low | Tier::Unknown)
         || !preferred_installed
@@ -241,6 +264,8 @@ pub fn plan_runtime_policy(
         device,
         model_profile,
         preferred_model,
+        preferred_model_score,
+        ranked_models,
         fallback_models,
         needs_model_download: !preferred_installed,
         enable_server_fallback,
@@ -302,6 +327,76 @@ fn select_preferred_model(candidates: &[&str], installed: &[String], catalog: &[
         .first()
         .map(|s| (*s).to_string())
         .unwrap_or_else(|| "ggml-base.bin".to_string())
+}
+
+fn rank_candidate_models(
+    candidates: &[&str],
+    profile: &HardwareProfile,
+    runtime_preference: &RuntimePreference,
+    installed: &[String],
+    catalog: &[String],
+) -> Vec<(String, f32)> {
+    let mut ranked: Vec<(String, f32)> = candidates
+        .iter()
+        .filter(|candidate| {
+            catalog.iter().any(|m| m.eq_ignore_ascii_case(candidate))
+                || installed.iter().any(|m| m.eq_ignore_ascii_case(candidate))
+        })
+        .map(|candidate| {
+            let score = compute_model_suitability(candidate, profile, runtime_preference, installed);
+            ((*candidate).to_string(), score)
+        })
+        .collect();
+
+    ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    ranked
+}
+
+fn compute_model_suitability(
+    model: &str,
+    profile: &HardwareProfile,
+    runtime_preference: &RuntimePreference,
+    installed: &[String],
+) -> f32 {
+    let (speed, quality, vram_req_gb) = if model.eq_ignore_ascii_case("ggml-large-v3.bin") {
+        (3.0, 10.0, 8.0)
+    } else if model.eq_ignore_ascii_case("ggml-large-v3-turbo.bin") {
+        (5.0, 9.0, 6.0)
+    } else if model.eq_ignore_ascii_case("ggml-medium.bin") {
+        (4.0, 9.0, 5.0)
+    } else if model.eq_ignore_ascii_case("ggml-small.bin") {
+        (6.0, 8.0, 3.0)
+    } else if model.eq_ignore_ascii_case("ggml-base.bin") {
+        (8.0, 7.0, 2.0)
+    } else {
+        (10.0, 5.0, 1.0)
+    };
+
+    let (speed_w, quality_w) = match profile.tier {
+        Tier::High => (0.35, 0.65),
+        Tier::Medium => (0.5, 0.5),
+        Tier::Low | Tier::Unknown => (0.7, 0.3),
+    };
+
+    let mut score: f32 = speed * speed_w + quality * quality_w;
+
+    let has_cuda = profile.accelerators.cuda;
+    let ram_gb = profile.memory.total_mb as f32 / 1024.0;
+
+    if matches!(runtime_preference, RuntimePreference::ForceCpu) && vram_req_gb > 4.0 {
+        score -= 1.5;
+    }
+    if !has_cuda && vram_req_gb > 4.0 {
+        score -= 2.0;
+    }
+    if ram_gb < 8.0 && vram_req_gb > 3.0 {
+        score -= 1.0;
+    }
+    if installed.iter().any(|m| m.eq_ignore_ascii_case(model)) {
+        score += 0.4;
+    }
+
+    score.clamp(0.0, 10.0)
 }
 
 fn backend_to_str(backend: &WhisperBackend) -> &'static str {

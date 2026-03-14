@@ -386,6 +386,14 @@ fn runtime_prefers_gpu(pref: &RuntimePreference) -> bool {
     !matches!(pref, RuntimePreference::ForceCpu)
 }
 
+fn server_device_hint(pref: &RuntimePreference) -> Option<String> {
+    if matches!(pref, RuntimePreference::ForceCpu) {
+        Some(String::from("cpu"))
+    } else {
+        Some(String::from("auto"))
+    }
+}
+
 fn file_size_label_bytes(bytes: u64) -> String {
     format!(" ({:.2} MB)", bytes as f64 / (1024.0 * 1024.0))
 }
@@ -420,6 +428,8 @@ fn try_open_winui_settings_host(
     models_dir: &std::path::Path,
     store_path: &std::path::Path,
     history_dir: &std::path::Path,
+    audio_dir: &std::path::Path,
+    transcripts_dir: &std::path::Path,
     onboarding: bool,
 ) -> bool {
     if let Ok(mut slot) = SETTINGS_HOST_CHILD.lock() {
@@ -515,7 +525,11 @@ fn try_open_winui_settings_host(
         .arg("--store-path")
         .arg(store_path)
         .arg("--history-dir")
-        .arg(history_dir);
+        .arg(history_dir)
+        .arg("--audio-dir")
+        .arg(audio_dir)
+        .arg("--transcripts-dir")
+        .arg(transcripts_dir);
     if onboarding {
         cmd.arg("--onboarding");
     }
@@ -770,7 +784,39 @@ fn sync_shared_model_store(updated_by: &str, config: &Config, active_model_path:
             store_path.display(),
             e
         );
+        return;
     }
+
+    if let Err(e) = write_cross_app_manifest(&models_dir, &store) {
+        warn!("[MODEL-STORE] failed to write cross-app manifest: {}", e);
+    }
+}
+
+fn write_cross_app_manifest(models_dir: &std::path::Path, store: &model_store::SharedModelStore) -> anyhow::Result<()> {
+    let manifest_path = models_dir.join("shared_runtime_manifest.v1.json");
+    let manifest = serde_json::json!({
+        "schema_version": "shared_runtime_manifest.v1",
+        "updated_at": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        "updated_by": "dictator",
+        "producer": {
+            "app_id": "dictator.windows",
+            "app_version": env!("CARGO_PKG_VERSION"),
+            "runtime_policy_schema": "runtime_policy.v1",
+            "model_store_schema": model_store::STORE_SCHEMA_VERSION,
+            "hardware_profile_schema": "hardware_profile.v1",
+            "corrections_schema": "dictator_corrections.v1"
+        },
+        "active_runtime_id": store.active_runtime_id,
+        "active_model_id": store.active_model_id,
+        "installed_runtimes_count": store.installed_runtimes.len(),
+        "installed_models_count": store.installed_models.len(),
+        "compat": {
+            "contora_min_schema_support": "shared_model_store.v1",
+            "dictator_min_schema_support": "shared_model_store.v1"
+        }
+    });
+    std::fs::write(&manifest_path, serde_json::to_string_pretty(&manifest)?)?;
+    Ok(())
 }
 
 fn try_switch_to_next_fallback_model(
@@ -802,6 +848,7 @@ fn try_switch_to_next_fallback_model(
         whisper_engine::unload_engine(engine);
 
         let mut updated = config_template.clone();
+        updated.whisper.backend = WhisperBackend::Embedded;
         updated.whisper.model_path = candidate.clone();
         if let Err(e) = updated.save() {
             error!("[POLICY] failed to save fallback model switch: {}", e);
@@ -1371,6 +1418,8 @@ fn main() -> Result<()> {
         let config_path_for_settings = Config::config_path();
         let models_dir_for_settings = models_dir.clone();
         let history_root_for_settings = history_root.clone();
+        let audio_dir_for_settings = config.storage.audio_history_dir.clone();
+        let transcripts_dir_for_settings = config.storage.transcripts_dir.clone();
 
         ui::set_settings_callback(move || {
             if try_open_winui_settings_host(
@@ -1378,6 +1427,8 @@ fn main() -> Result<()> {
                 &models_dir_for_settings,
                 &model_store::default_store_path(),
                 &history_root_for_settings,
+                &audio_dir_for_settings,
+                &transcripts_dir_for_settings,
                 false,
             ) {
                 return;
@@ -1400,27 +1451,14 @@ fn main() -> Result<()> {
         });
     }
 
-    {
-        let config_path_for_welcome = Config::config_path();
-        let models_dir_for_welcome = models_dir.clone();
-        let history_root_for_welcome = history_root.clone();
-        ui::set_settings_welcome_callback(move || {
-            let _ = try_open_winui_settings_host(
-                &config_path_for_welcome,
-                &models_dir_for_welcome,
-                &model_store::default_store_path(),
-                &history_root_for_welcome,
-                true,
-            );
-        });
-    }
-
     if is_first_run() {
         if try_open_winui_settings_host(
             &Config::config_path(),
             &models_dir,
             &model_store::default_store_path(),
             &history_root,
+            &config.storage.audio_history_dir,
+            &config.storage.transcripts_dir,
             true,
         ) {
             mark_onboarding_completed();
@@ -1676,6 +1714,7 @@ fn main() -> Result<()> {
                 .to_string_lossy()
                 .to_string(),
         );
+        whisper_manager.set_preferred_device(server_device_hint(&config_clone.runtime.preference));
 
         info!("[MAIN] Event handler thread started, waiting for hotkey events...");
 
@@ -1693,6 +1732,7 @@ fn main() -> Result<()> {
                     *active_guard = live_model_path.clone();
                 }
                 whisper_manager.set_model_path(live_model_path.to_string_lossy().to_string());
+                whisper_manager.set_preferred_device(server_device_hint(&live_cfg.runtime.preference));
             }
             let is_embedded = live_backend == WhisperBackend::Embedded;
 
@@ -2022,22 +2062,71 @@ fn main() -> Result<()> {
 
                     // NOW stop recording (after streaming has processed final buffer)
                     info!("[MAIN] Calling recorder.stop_recording()...");
-                    let audio_data = match recorder_clone.stop_recording() {
+                    let mut audio_data = match recorder_clone.stop_recording() {
                         Ok(data) => {
                             info!("[MAIN] Got {} samples of audio", data.len());
                             data
                         }
                         Err(e) => {
                             error!("[MAIN] FAILED to stop recording: {}", e);
-                            if !is_embedded {
-                                whisper_manager.stop_if_owned();
+                            match recorder_clone.get_unprocessed_buffer() {
+                                Ok((fallback_data, _)) if !fallback_data.is_empty() => {
+                                    warn!(
+                                        "[MAIN] Recovered {} samples from fallback buffer after stop failure",
+                                        fallback_data.len()
+                                    );
+                                    fallback_data
+                                }
+                                Ok(_) => {
+                                    error!("[MAIN] Fallback buffer is empty after stop failure");
+                                    Vec::new()
+                                }
+                                Err(buf_err) => {
+                                    error!(
+                                        "[MAIN] Failed to read fallback buffer after stop failure: {}",
+                                        buf_err
+                                    );
+                                    Vec::new()
+                                }
                             }
-                            continue;
                         }
                     };
 
                     if audio_data.is_empty() {
-                        info!("No audio recorded");
+                        if let Ok((fallback_data, _)) = recorder_clone.get_unprocessed_buffer() {
+                            if !fallback_data.is_empty() {
+                                warn!(
+                                    "[MAIN] stop_recording returned empty, recovered {} samples via fallback buffer",
+                                    fallback_data.len()
+                                );
+                                audio_data = fallback_data;
+                            }
+                        }
+                    }
+
+                    if audio_data.is_empty() {
+                        info!("No audio recorded (including fallback)");
+                        if config_clone.history.enabled {
+                            let base_mode = if ui::is_streaming_enabled() {
+                                "streaming"
+                            } else {
+                                "full"
+                            };
+                            let mode = format!("{}|{}", base_mode, "empty_capture");
+                            let fail_text = "[Recording failed] Empty capture after stop".to_string();
+                            if let Err(err) = history.save_recording(
+                                &audio_data,
+                                &fail_text,
+                                0.0,
+                                &mode,
+                                &config_clone.whisper.language,
+                            ) {
+                                error!("[MAIN] Failed to persist empty fallback recording: {}", err);
+                            }
+                        }
+                        if !is_embedded {
+                            whisper_manager.stop_if_owned();
+                        }
                         overlay_clone.hide();
                         continue;
                     }
@@ -2079,16 +2168,36 @@ fn main() -> Result<()> {
                         );
                         accumulated_text.clone()
                     } else {
+                        let mut force_embedded_this_run = false;
                         if !is_embedded {
                             if let Err(e) = whisper_manager.ensure_running(Duration::from_secs(30))
                             {
                                 error!("[MAIN] Failed to start Whisper server: {}", e);
-                                overlay_clone.show("Whisper server startup error");
-                                std::thread::sleep(Duration::from_secs(2));
-                                overlay_clone.hide();
+                                overlay_clone.update_status_text("Server startup failed, trying local fallback...");
+                                overlay_clone.update_body_text("Switching to embedded model");
                                 whisper_manager.stop_if_owned();
-                                save_failed_audio("server startup error", "server_start_failed");
-                                continue;
+
+                                if let Some(new_model_path) = try_switch_to_next_fallback_model(
+                                    &config_clone,
+                                    &active_model_path_clone,
+                                    &engine,
+                                    &policy_fallback_models,
+                                ) {
+                                    info!(
+                                        "[POLICY] Switching to embedded recovery model after server start fail: {:?}",
+                                        new_model_path
+                                    );
+                                    policy_stage =
+                                        String::from("embedded_recovery_after_server_start_fail");
+                                    policy_retry_count = policy_retry_count.saturating_add(1);
+                                    force_embedded_this_run = true;
+                                } else {
+                                    overlay_clone.show("Whisper server startup error");
+                                    std::thread::sleep(Duration::from_secs(2));
+                                    overlay_clone.hide();
+                                    save_failed_audio("server startup error", "server_start_failed");
+                                    continue;
+                                }
                             }
                         }
 
@@ -2111,7 +2220,7 @@ fn main() -> Result<()> {
                             .map(|p| runtime_prefers_gpu(&p))
                             .unwrap_or(true);
                         std::thread::spawn(move || {
-                            let result = if is_embedded {
+                            let result = if is_embedded || force_embedded_this_run {
                                 whisper_engine::transcribe_with_engine(
                                     &engine_for_transcribe,
                                     &model_path_for_transcribe,

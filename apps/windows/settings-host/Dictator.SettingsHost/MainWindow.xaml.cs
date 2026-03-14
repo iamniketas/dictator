@@ -6,6 +6,7 @@ using System.Linq;
 using System.Management;
 using System.Net.Http;
 using System.Net.Http.Headers;
+using System.Net;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text.Json;
@@ -51,9 +52,13 @@ public sealed partial class MainWindow : Window
 
         SetCurrentProcessExplicitAppUserModelID("Dictator.SettingsHost");
 
-        (_configPath, _modelsDir, _storePath, var historyRoot, _startInOnboarding) = ParseArgs();
-        _audioHistoryDir = Path.Combine(historyRoot, "audio");
-        _transcriptsDir = Path.Combine(historyRoot, "transcripts");
+        (_configPath, _modelsDir, _storePath, var historyRoot, var audioDirArg, var transcriptsDirArg, _startInOnboarding) = ParseArgs();
+        _audioHistoryDir = string.IsNullOrWhiteSpace(audioDirArg)
+            ? Path.Combine(historyRoot, "audio")
+            : audioDirArg;
+        _transcriptsDir = string.IsNullOrWhiteSpace(transcriptsDirArg)
+            ? Path.Combine(historyRoot, "transcripts")
+            : transcriptsDirArg;
         LoadStorageConfig();
 
         Title = "Dictator Settings";
@@ -61,7 +66,7 @@ public sealed partial class MainWindow : Window
         TrySetWindowIcon();
         AttachCloseHint();
 
-        SelectNavByTag(_startInOnboarding ? "welcome" : "models");
+        SelectNavByTag(_startInOnboarding ? "dashboard" : "models");
         CatalogItems.ItemsSource = _catalogModels;
         HistoryList.ItemsSource = _historyEntries;
         CorrectionsList.ItemsSource = _correctionEntries;
@@ -70,7 +75,7 @@ public sealed partial class MainWindow : Window
         _uiReady = true;
     }
 
-    private static (string configPath, string modelsDir, string storePath, string historyDir, bool onboarding) ParseArgs()
+    private static (string configPath, string modelsDir, string storePath, string historyDir, string audioDir, string transcriptsDir, bool onboarding) ParseArgs()
     {
         var args = Environment.GetCommandLineArgs();
         string GetValue(string key, string fallback)
@@ -90,6 +95,8 @@ public sealed partial class MainWindow : Window
             GetValue("--models-dir", Path.Combine(local, "AudioModels")),
             GetValue("--store-path", Path.Combine(local, "AudioModels", "shared_model_store.v1.json")),
             GetValue("--history-dir", Path.Combine(docs, "Dictator", "History")),
+            GetValue("--audio-dir", string.Empty),
+            GetValue("--transcripts-dir", string.Empty),
             onboarding
         );
     }
@@ -216,8 +223,8 @@ public sealed partial class MainWindow : Window
             : "Latency hint: full mode waits for stop, then runs one stable pass with usually better consistency.";
 
         DictationQualityHintText.Text = llm
-            ? "Quality hint: Ollama correction is ON (better readability, additional post-processing delay)."
-            : "Quality hint: raw ASR output is used directly (faster end-to-end, no cleanup pass).";
+            ? "Quality hint: Ollama cleanup is ON. Text is cleaner, final result appears a bit later."
+            : "Quality hint: direct output mode is ON. Fastest result, no extra cleanup.";
 
         ChunkHintText.Text = chunk switch
         {
@@ -260,6 +267,8 @@ public sealed partial class MainWindow : Window
     {
         var activePath = NormalizePath(GetTomlString("whisper", "model_path") ?? string.Empty);
         var backend = (GetTomlString("whisper", "backend") ?? string.Empty).Trim();
+        var runtimePref = (GetTomlString("runtime", "preference") ?? "auto").Trim();
+        var hasCudaHint = (HardwareGpuText.Text ?? string.Empty).Contains("NVIDIA", StringComparison.OrdinalIgnoreCase);
         var store = LoadStoreSnapshot();
         var storeById = store?.InstalledModels
             .GroupBy(m => m.Id, StringComparer.OrdinalIgnoreCase)
@@ -267,9 +276,15 @@ public sealed partial class MainWindow : Window
             ?? new Dictionary<string, StoreModelDoc>(StringComparer.OrdinalIgnoreCase);
         var existing = _catalogModels.ToDictionary(m => m.Id, StringComparer.OrdinalIgnoreCase);
         var ordered = _catalogSource
-            .OrderByDescending(m => m.CanDownload)
-            .ThenBy(m => m.SizeBytes)
-            .ThenBy(m => m.Name, StringComparer.OrdinalIgnoreCase);
+            .Select(m => new
+            {
+                Model = m,
+                Fit = EstimateSuitability(m, _lastHardwareScore, hasCudaHint, runtimePref),
+            })
+            .OrderByDescending(x => x.Fit)
+            .ThenByDescending(x => x.Model.Accuracy10)
+            .ThenByDescending(x => x.Model.Speed10)
+            .Select(x => x.Model);
 
         var next = new List<CatalogModelItem>();
 
@@ -278,10 +293,14 @@ public sealed partial class MainWindow : Window
             var localPath = string.IsNullOrWhiteSpace(source.FileName)
                 ? string.Empty
                 : Path.Combine(_modelsDir, source.FileName);
+            var partialPath = string.IsNullOrWhiteSpace(source.FileName)
+                ? string.Empty
+                : GetPartialDownloadPath(source.FileName);
 
             bool installed;
             bool active;
             long size;
+            var hasPartialDownload = false;
             if (storeById.TryGetValue(source.Id, out var fromStore))
             {
                 installed = string.Equals(fromStore.Health, "ok", StringComparison.OrdinalIgnoreCase)
@@ -302,6 +321,10 @@ public sealed partial class MainWindow : Window
                     installed = !string.IsNullOrWhiteSpace(localPath) && File.Exists(localPath);
                     active = installed && NormalizePath(localPath) == activePath;
                     size = installed ? new FileInfo(localPath).Length : source.SizeBytes;
+                    hasPartialDownload = !installed
+                        && !string.IsNullOrWhiteSpace(partialPath)
+                        && File.Exists(partialPath)
+                        && new FileInfo(partialPath).Length > 0;
                 }
                 else if (string.Equals(source.RuntimeId, "server", StringComparison.OrdinalIgnoreCase))
                 {
@@ -325,6 +348,8 @@ public sealed partial class MainWindow : Window
             }
 
             vm.SyncFrom(source, installed, active, size);
+            vm.HasPartialDownload = hasPartialDownload;
+            vm.SuitabilityScore = EstimateSuitability(source, _lastHardwareScore, hasCudaHint, runtimePref);
             next.Add(vm);
         }
 
@@ -336,6 +361,25 @@ public sealed partial class MainWindow : Window
 
         _ = RefreshCatalogSizeHintsAsync();
         RefreshWelcomeSummary();
+    }
+
+    private static double EstimateSuitability(CatalogModelItem model, int hardwareScore, bool hasCuda, string runtimePref)
+    {
+        // Profile-aware score in [0..10] used for user-facing ordering.
+        var speedW = hardwareScore >= 8 ? 0.35 : hardwareScore >= 5 ? 0.5 : 0.7;
+        var accW = 1.0 - speedW;
+        var score = model.Speed10 * speedW + model.Accuracy10 * accW;
+
+        var isServer = string.Equals(model.RuntimeId, "server", StringComparison.OrdinalIgnoreCase);
+        var isCloud = string.Equals(model.RuntimeId, "cloud", StringComparison.OrdinalIgnoreCase);
+
+        if (isServer && !hasCuda) score -= 3.0;
+        if (isServer && runtimePref == "force_cpu") score -= 2.0;
+        if (isCloud) score -= 1.5; // local-first ordering
+        if (runtimePref == "force_gpu" && hasCuda && (isServer || model.Accuracy10 >= 9)) score += 0.8;
+        if (hardwareScore <= 4 && model.SizeBytes > 1024L * 1024 * 1024) score -= 1.5;
+
+        return Math.Clamp(score, 0.0, 10.0);
     }
 
     private void LoadConfigFields()
@@ -450,7 +494,7 @@ public sealed partial class MainWindow : Window
     {
         if (args.SelectedItem is not NavigationViewItem item || item.Tag is not string tag) return;
 
-        WelcomePanel.Visibility = tag == "welcome" ? Visibility.Visible : Visibility.Collapsed;
+        WelcomePanel.Visibility = tag == "dashboard" ? Visibility.Visible : Visibility.Collapsed;
         ModelsPanel.Visibility = tag == "models" ? Visibility.Visible : Visibility.Collapsed;
         RuntimePanel.Visibility = tag == "runtime" ? Visibility.Visible : Visibility.Collapsed;
         DictationPanel.Visibility = tag == "dictation" ? Visibility.Visible : Visibility.Collapsed;
@@ -460,7 +504,7 @@ public sealed partial class MainWindow : Window
 
         PageTitle.Text = tag switch
         {
-            "welcome" => "Welcome",
+            "dashboard" => "Dashboard",
             "runtime" => "Runtime & Device",
             "dictation" => "Dictation",
             "history" => "History",
@@ -592,6 +636,9 @@ public sealed partial class MainWindow : Window
         {
             var activePath = NormalizePath(GetTomlString("whisper", "model_path") ?? string.Empty);
             var backend = (GetTomlString("whisper", "backend") ?? string.Empty).Trim();
+            var partialPath = string.IsNullOrWhiteSpace(model.FileName)
+                ? string.Empty
+                : GetPartialDownloadPath(model.FileName);
 
             bool deletingActive = false;
             if (string.Equals(model.RuntimeId, "server", StringComparison.OrdinalIgnoreCase))
@@ -610,6 +657,11 @@ public sealed partial class MainWindow : Window
                 var localPath = Path.Combine(_modelsDir, model.FileName);
                 deletingActive = NormalizePath(localPath) == activePath;
                 if (File.Exists(localPath)) File.Delete(localPath);
+            }
+
+            if (!string.IsNullOrWhiteSpace(partialPath) && File.Exists(partialPath))
+            {
+                File.Delete(partialPath);
             }
 
             if (deletingActive)
@@ -646,7 +698,15 @@ public sealed partial class MainWindow : Window
         if (!_downloadJobs.TryAdd(model.Id, cts)) return;
 
         var targetPath = Path.Combine(_modelsDir, model.FileName);
-        var tempPath = targetPath + ".tmp." + Guid.NewGuid().ToString("N");
+        var tempPath = GetPartialDownloadPath(model.FileName);
+        var expectedBytes = model.ReportedSizeBytes ?? model.SizeBytes;
+        if (!HasEnoughDiskSpace(targetPath, expectedBytes))
+        {
+            model.DownloadStatusText = $"Not enough disk space. Required: {FormatBytes(expectedBytes)}";
+            _downloadJobs.Remove(model.Id);
+            cts.Dispose();
+            return;
+        }
 
         model.IsDownloading = true;
         model.DownloadProgress = 0;
@@ -655,17 +715,38 @@ public sealed partial class MainWindow : Window
         try
         {
             using var http = new HttpClient { Timeout = TimeSpan.FromMinutes(30) };
-            using var response = await http.GetAsync(model.Url, HttpCompletionOption.ResponseHeadersRead, cts.Token);
+            long existingBytes = File.Exists(tempPath) ? new FileInfo(tempPath).Length : 0;
+            using var request = new HttpRequestMessage(HttpMethod.Get, model.Url);
+            if (existingBytes > 0)
+            {
+                request.Headers.Range = new RangeHeaderValue(existingBytes, null);
+            }
+
+            using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cts.Token);
             response.EnsureSuccessStatusCode();
 
-            var total = response.Content.Headers.ContentLength.GetValueOrDefault(model.SizeBytes);
+            var isResuming = existingBytes > 0 && response.StatusCode == HttpStatusCode.PartialContent;
+            if (existingBytes > 0 && !isResuming)
+            {
+                // Server ignored range; restart from scratch to avoid corrupt output.
+                existingBytes = 0;
+            }
+
+            var contentLength = response.Content.Headers.ContentLength.GetValueOrDefault(model.SizeBytes);
+            var total = isResuming ? existingBytes + contentLength : contentLength;
             if (total > 0) model.ReportedSizeBytes = total;
-            long downloaded = 0;
+            long downloaded = existingBytes;
             var started = DateTime.UtcNow;
             var buffer = new byte[128 * 1024];
 
             await using (var source = await response.Content.ReadAsStreamAsync(cts.Token))
-            await using (var dest = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None, 128 * 1024, useAsync: true))
+            await using (var dest = new FileStream(
+                tempPath,
+                isResuming ? FileMode.Append : FileMode.Create,
+                FileAccess.Write,
+                FileShare.None,
+                128 * 1024,
+                useAsync: true))
             {
                 while (true)
                 {
@@ -690,6 +771,7 @@ public sealed partial class MainWindow : Window
 
             model.IsInstalled = true;
             model.InstalledBytes = new FileInfo(targetPath).Length;
+            model.HasPartialDownload = false;
 
             var activePath = GetTomlString("whisper", "model_path")?.Trim() ?? string.Empty;
             if (string.IsNullOrWhiteSpace(activePath))
@@ -708,15 +790,16 @@ public sealed partial class MainWindow : Window
         }
         catch (OperationCanceledException)
         {
-            model.DownloadStatusText = "Download canceled.";
+            model.DownloadStatusText = "Download paused. Click Resume.";
+            model.HasPartialDownload = File.Exists(tempPath) && new FileInfo(tempPath).Length > 0;
         }
         catch (Exception ex)
         {
             model.DownloadStatusText = $"Download failed: {ex.Message}";
+            model.HasPartialDownload = File.Exists(tempPath) && new FileInfo(tempPath).Length > 0;
         }
         finally
         {
-            try { if (File.Exists(tempPath)) File.Delete(tempPath); } catch { }
             model.IsDownloading = false;
 
             if (_downloadJobs.TryGetValue(model.Id, out var job) && ReferenceEquals(job, cts))
@@ -727,6 +810,26 @@ public sealed partial class MainWindow : Window
 
             SyncSharedModelStore();
             LoadCatalog();
+        }
+    }
+
+    private string GetPartialDownloadPath(string fileName)
+        => Path.Combine(_modelsDir, fileName + ".partial");
+
+    private static bool HasEnoughDiskSpace(string targetPath, long requiredBytes)
+    {
+        try
+        {
+            var root = Path.GetPathRoot(targetPath);
+            if (string.IsNullOrWhiteSpace(root)) return true;
+            var drive = new DriveInfo(root);
+            // Keep small reserve for temp and metadata writes.
+            var requiredWithReserve = (long)(requiredBytes * 1.1) + (128L * 1024 * 1024);
+            return drive.AvailableFreeSpace > requiredWithReserve;
+        }
+        catch
+        {
+            return true;
         }
     }
 
@@ -1257,6 +1360,41 @@ public sealed partial class MainWindow : Window
             });
         }
 
+        // Compatibility fallback: legacy flows may keep .txt next to audio files.
+        if (items.Count == 0)
+        {
+            foreach (var textPath in Directory.EnumerateFiles(_audioHistoryDir, "*.txt", SearchOption.AllDirectories))
+            {
+                var file = new FileInfo(textPath);
+                var id = Path.GetFileNameWithoutExtension(textPath);
+                var day = file.Directory?.Name ?? string.Empty;
+                var audioPath = Path.Combine(_audioHistoryDir, day, id + ".wav");
+                var metaPath = Path.Combine(_transcriptsDir, day, id + ".json");
+
+                string preview;
+                try
+                {
+                    var content = File.ReadAllText(textPath).Replace('\n', ' ').Trim();
+                    preview = content.Length > 96 ? content[..96] + "..." : content;
+                }
+                catch
+                {
+                    preview = "(Failed to read transcript)";
+                }
+
+                items.Add(new HistoryEntryItem
+                {
+                    Id = id,
+                    Title = $"{file.LastWriteTime:yyyy-MM-dd HH:mm} · {id}",
+                    Preview = preview,
+                    AudioPath = audioPath,
+                    TextPath = textPath,
+                    MetaPath = metaPath,
+                    SortKey = file.LastWriteTimeUtc
+                });
+            }
+        }
+
         _historyEntries.Clear();
         foreach (var item in items.OrderByDescending(i => i.SortKey).Take(250))
         {
@@ -1445,6 +1583,8 @@ public sealed partial class MainWindow : Window
         raw = raw.Trim();
         if (raw.StartsWith('"') && raw.EndsWith('"') && raw.Length >= 2)
             return raw[1..^1].Replace("\\\\", "\\").Replace("\\\"", "\"");
+        if (raw.StartsWith('\'') && raw.EndsWith('\'') && raw.Length >= 2)
+            return raw[1..^1];
         return raw;
     }
 
@@ -1680,6 +1820,46 @@ public sealed partial class MainWindow : Window
                 DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
             });
             File.WriteAllText(_storePath, json);
+            WriteCrossAppManifest(store);
+        }
+        catch
+        {
+        }
+    }
+
+    private void WriteCrossAppManifest(SharedModelStoreDoc store)
+    {
+        try
+        {
+            var path = Path.Combine(_modelsDir, "shared_runtime_manifest.v1.json");
+            var doc = new
+            {
+                schema_version = "shared_runtime_manifest.v1",
+                updated_at = DateTimeOffset.UtcNow.ToString("O"),
+                updated_by = "dictator.settings_host",
+                producer = new
+                {
+                    app_id = "dictator.windows.settings",
+                    app_version = "0.3.0",
+                    runtime_policy_schema = "runtime_policy.v1",
+                    model_store_schema = "shared_model_store.v1",
+                    hardware_profile_schema = "hardware_profile.v1",
+                    corrections_schema = "dictator_corrections.v1"
+                },
+                active_runtime_id = store.ActiveRuntimeId,
+                active_model_id = store.ActiveModelId,
+                installed_runtimes_count = store.InstalledRuntimes.Count,
+                installed_models_count = store.InstalledModels.Count,
+                compat = new
+                {
+                    contora_min_schema_support = "shared_model_store.v1",
+                    dictator_min_schema_support = "shared_model_store.v1"
+                }
+            };
+            File.WriteAllText(path, JsonSerializer.Serialize(doc, new JsonSerializerOptions
+            {
+                WriteIndented = true
+            }));
         }
         catch
         {
@@ -1879,9 +2059,11 @@ public sealed partial class MainWindow : Window
         private bool _isInstalled;
         private bool _isActive;
         private bool _isDownloading;
+        private bool _hasPartialDownload;
         private long _installedBytes;
         private long? _reportedSizeBytes;
         private double _downloadProgress;
+        private double _suitabilityScore;
         private string _downloadStatusText = string.Empty;
 
         public required string Id { get; init; }
@@ -1950,6 +2132,19 @@ public sealed partial class MainWindow : Window
                 OnPropertyChanged(nameof(DownloadEnabled));
                 OnPropertyChanged(nameof(ProgressVisibility));
                 OnPropertyChanged(nameof(ExternalActionEnabled));
+                OnPropertyChanged(nameof(DownloadActionLabel));
+            }
+        }
+
+        public bool HasPartialDownload
+        {
+            get => _hasPartialDownload;
+            set
+            {
+                if (_hasPartialDownload == value) return;
+                _hasPartialDownload = value;
+                OnPropertyChanged();
+                OnPropertyChanged(nameof(DownloadActionLabel));
             }
         }
 
@@ -1988,6 +2183,18 @@ public sealed partial class MainWindow : Window
             }
         }
 
+        public double SuitabilityScore
+        {
+            get => _suitabilityScore;
+            set
+            {
+                if (Math.Abs(_suitabilityScore - value) < 0.001) return;
+                _suitabilityScore = value;
+                OnPropertyChanged();
+                OnPropertyChanged(nameof(SuitabilityLine));
+            }
+        }
+
         public string DownloadStatusText
         {
             get => _downloadStatusText;
@@ -2005,7 +2212,9 @@ public sealed partial class MainWindow : Window
         public string LanguageLine => $"Tags: {string.Join(", ", LanguageTags)}";
         public string RuntimeLine => string.Equals(RuntimeId, "cloud", StringComparison.OrdinalIgnoreCase) ? "Processing: Cloud" : "Processing: Local";
         public string ExternalActionLabel => "Connect Cloud";
+        public string DownloadActionLabel => HasPartialDownload ? "Resume" : "Download";
         public string SizeLine => string.Equals(RuntimeId, "cloud", StringComparison.OrdinalIgnoreCase) ? "Cloud" : FormatBytes(IsInstalled ? InstalledBytes : (ReportedSizeBytes ?? SizeBytes));
+        public string SuitabilityLine => $"Device fit: {SuitabilityScore:0.0}/10";
 
         public string StateLabel => IsActive ? "Currently active" : IsInstalled ? "Installed" : RuntimeId == "cloud" ? "Cloud profile" : "Not installed";
         public Brush StateBrush => new SolidColorBrush(
@@ -2054,6 +2263,8 @@ public sealed partial class MainWindow : Window
             IsDownloading = false,
             DownloadStatusText = string.Empty,
             DownloadProgress = 0,
+            SuitabilityScore = 0,
+            HasPartialDownload = false,
         };
 
         public void SyncFrom(CatalogModelItem source, bool installed, bool active, long sizeBytes)
@@ -2071,6 +2282,7 @@ public sealed partial class MainWindow : Window
             {
                 DownloadStatusText = string.Empty;
                 DownloadProgress = 0;
+                HasPartialDownload = false;
             }
         }
 

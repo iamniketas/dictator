@@ -1,4 +1,4 @@
-//! UI module - System tray and overlay windows
+﻿//! UI module - System tray and overlay windows
 
 use anyhow::Result;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -14,8 +14,8 @@ use windows::Win32::UI::Shell::{
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CS_HREDRAW, CS_VREDRAW, CreatePopupMenu, CreateWindowExW, DefWindowProcW,
     DestroyMenu, DispatchMessageW, GetCursorPos, GetMessageW, IDI_APPLICATION, IMAGE_ICON,
-    LR_LOADFROMFILE, LoadIconW, LoadImageW, MB_ICONINFORMATION, MB_OK, MENU_ITEM_FLAGS, MF_CHECKED,
-    MF_GRAYED, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MSG, MessageBoxW, PostMessageW,
+    LR_LOADFROMFILE, LoadIconW, LoadImageW, MENU_ITEM_FLAGS, MF_CHECKED, MF_GRAYED, MF_SEPARATOR,
+    MF_STRING, MF_UNCHECKED, MSG, PostMessageW,
     PostQuitMessage, RegisterClassW, SetForegroundWindow, TPM_BOTTOMALIGN, TPM_LEFTALIGN,
     TrackPopupMenu, WM_COMMAND, WM_CONTEXTMENU, WM_DESTROY, WM_NULL, WM_RBUTTONDOWN, WM_RBUTTONUP,
     WM_USER, WNDCLASSW, WS_OVERLAPPEDWINDOW,
@@ -28,19 +28,14 @@ const ID_STREAMING: u16 = 1002;
 const ID_CHUNK_3: u16 = 1003;
 const ID_CHUNK_8: u16 = 1004;
 const ID_CHUNK_15: u16 = 1005;
-const ID_OPEN_HISTORY: u16 = 1006;
 const ID_OLLAMA: u16 = 1007;
 const ID_OPEN_CONFIG: u16 = 1008;
-const ID_ABOUT: u16 = 1009;
-const ID_HISTORY_START: u16 = 1100; // Start of dynamic history IDs (1100-1199)
-const ID_HISTORY_END: u16 = 1199;
 const ID_MODEL_START: u16 = 1200; // Start of dynamic model IDs (1200-1299)
 const ID_MODEL_END: u16 = 1299;
 const ID_DOWNLOAD_START: u16 = 1300; // Start of download model IDs (1300-1399)
 const ID_DOWNLOAD_END: u16 = 1399;
 const ID_SETTINGS: u16 = 1010;
 const ID_INSTALL_UPDATE: u16 = 1011;
-const ID_WELCOME: u16 = 1012;
 
 static SHOULD_EXIT: AtomicBool = AtomicBool::new(false);
 static STREAMING_ENABLED: AtomicBool = AtomicBool::new(false);
@@ -80,8 +75,6 @@ static DOWNLOAD_LIST_CALLBACK: std::sync::Mutex<
 
 // Settings window callback
 static SETTINGS_CALLBACK: std::sync::Mutex<Option<Box<dyn Fn() + Send + 'static>>> =
-    std::sync::Mutex::new(None);
-static SETTINGS_WELCOME_CALLBACK: std::sync::Mutex<Option<Box<dyn Fn() + Send + 'static>>> =
     std::sync::Mutex::new(None);
 
 /// Entry for history menu
@@ -399,16 +392,6 @@ unsafe extern "system" fn window_proc(
     }
 }
 
-/// Set callback for opening settings on Welcome page.
-pub fn set_settings_welcome_callback<F>(callback: F)
-where
-    F: Fn() + Send + 'static,
-{
-    if let Ok(mut cb) = SETTINGS_WELCOME_CALLBACK.lock() {
-        *cb = Some(Box::new(callback));
-    }
-}
-
 unsafe fn window_proc_impl(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     match msg {
         WM_TRAYICON => {
@@ -417,7 +400,7 @@ unsafe fn window_proc_impl(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
                 || tray_event == WM_RBUTTONDOWN
                 || tray_event == WM_CONTEXTMENU
             {
-                show_context_menu(hwnd);
+                unsafe { show_context_menu(hwnd) };
             }
             LRESULT(0)
         }
@@ -425,7 +408,7 @@ unsafe fn window_proc_impl(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
             let cmd = (wparam.0 & 0xFFFF) as u16;
             if cmd == ID_EXIT {
                 SHOULD_EXIT.store(true, Ordering::SeqCst);
-                PostQuitMessage(0);
+                unsafe { PostQuitMessage(0) };
             } else if cmd == ID_STREAMING {
                 let new_state = !STREAMING_ENABLED.load(Ordering::SeqCst);
                 STREAMING_ENABLED.store(new_state, Ordering::SeqCst);
@@ -442,21 +425,6 @@ unsafe fn window_proc_impl(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
             } else if cmd == ID_CHUNK_15 {
                 set_streaming_chunk_seconds(15);
                 eprintln!("[TRAY] Streaming chunk set to 15s");
-            } else if cmd == ID_OPEN_HISTORY {
-                eprintln!("[TRAY] Opening history folder");
-                if let Ok(cb) = HISTORY_OPEN_CALLBACK.lock() {
-                    if let Some(ref callback) = *cb {
-                        callback();
-                    }
-                }
-            } else if cmd >= ID_HISTORY_START && cmd <= ID_HISTORY_END {
-                let index = (cmd - ID_HISTORY_START) as usize;
-                eprintln!("[TRAY] Copying history entry {}", index);
-                if let Ok(cb) = HISTORY_COPY_CALLBACK.lock() {
-                    if let Some(ref callback) = *cb {
-                        callback(index);
-                    }
-                }
             } else if cmd >= ID_MODEL_START && cmd <= ID_MODEL_END {
                 let index = (cmd - ID_MODEL_START) as usize;
                 eprintln!("[TRAY] Selecting model {}", index);
@@ -493,13 +461,6 @@ unsafe fn window_proc_impl(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
                         callback();
                     }
                 }
-            } else if cmd == ID_WELCOME {
-                eprintln!("[TRAY] Opening welcome");
-                if let Ok(cb) = SETTINGS_WELCOME_CALLBACK.lock() {
-                    if let Some(ref callback) = *cb {
-                        callback();
-                    }
-                }
             } else if cmd >= ID_DOWNLOAD_START && cmd <= ID_DOWNLOAD_END {
                 let index = (cmd - ID_DOWNLOAD_START) as usize;
                 if !IS_DOWNLOADING.load(Ordering::SeqCst) {
@@ -510,23 +471,14 @@ unsafe fn window_proc_impl(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
                         }
                     }
                 }
-            } else if cmd == ID_ABOUT {
-                let _ = MessageBoxW(
-                    hwnd,
-                    w!(
-                        "Dictator v0.1.0-alpha\r\nVoice dictation for Windows\r\n\r\nHotkey: Right Ctrl\r\n  Hold >300ms \u{2192} Push-to-Talk\r\n  Tap          \u{2192} Toggle mode\r\n\r\nRuns 100% locally. No cloud, no telemetry.\r\n\r\nhttps://github.com/iamniketas/dictator"
-                    ),
-                    w!("About Dictator"),
-                    MB_OK | MB_ICONINFORMATION,
-                );
             }
             LRESULT(0)
         }
         WM_DESTROY => {
-            PostQuitMessage(0);
+            unsafe { PostQuitMessage(0) };
             LRESULT(0)
         }
-        _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+        _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
     }
 }
 
@@ -536,7 +488,7 @@ unsafe fn show_context_menu(hwnd: HWND) {
             return;
         };
 
-        // ── Update notification (shown when a new version is available) ──────
+        // Update notification (shown when a new version is available).
         if let Ok(guard) = UPDATE_AVAILABLE_VERSION.lock() {
             if let Some(ref version) = *guard {
                 let label = format!("\u{2191} Update available (v{}) \u{2014} Install", version);
@@ -551,7 +503,7 @@ unsafe fn show_context_menu(hwnd: HWND) {
             }
         }
 
-        // ── Model selector (quick switch) ────────────────────────────────────
+        // Model selector.
         let models = if let Ok(cb) = MODEL_GET_LIST_CALLBACK.lock() {
             if let Some(ref callback) = *cb {
                 callback()
@@ -563,12 +515,7 @@ unsafe fn show_context_menu(hwnd: HWND) {
         };
 
         if models.is_empty() {
-            let _ = AppendMenuW(
-                menu,
-                MF_GRAYED | MF_STRING,
-                0,
-                w!("No models — open Settings"),
-            );
+            let _ = AppendMenuW(menu, MF_GRAYED | MF_STRING, 0, w!("No models - open Settings"));
         } else {
             for model in &models {
                 let flag = if model.is_current {
@@ -588,39 +535,7 @@ unsafe fn show_context_menu(hwnd: HWND) {
             }
         }
 
-        // ── Recent recordings (last 3) ───────────────────────────────────────
-        let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
-
-        let history_entries = if let Ok(cb) = HISTORY_GET_ENTRIES_CALLBACK.lock() {
-            if let Some(ref callback) = *cb {
-                callback()
-            } else {
-                Vec::new()
-            }
-        } else {
-            Vec::new()
-        };
-
-        if history_entries.is_empty() {
-            let _ = AppendMenuW(menu, MF_GRAYED | MF_STRING, 0, w!("No recent recordings"));
-        } else {
-            for entry in history_entries.iter().take(3) {
-                let menu_id = ID_HISTORY_START + entry.id as u16;
-                let wide_label: Vec<u16> = entry
-                    .label
-                    .encode_utf16()
-                    .chain(std::iter::once(0))
-                    .collect();
-                let _ = AppendMenuW(
-                    menu,
-                    MF_STRING,
-                    menu_id as usize,
-                    windows::core::PCWSTR(wide_label.as_ptr()),
-                );
-            }
-        }
-
-        // ── Actions ──────────────────────────────────────────────────────────
+        // Dictation mode toggles.
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
         let _ = AppendMenuW(menu, MF_GRAYED | MF_STRING, 0, w!("Dictation Mode"));
         let streaming_enabled = STREAMING_ENABLED.load(Ordering::SeqCst);
@@ -674,23 +589,10 @@ unsafe fn show_context_menu(hwnd: HWND) {
             ID_CHUNK_15 as usize,
             w!("Chunk: 15s"),
         );
+
+        // Main actions.
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
-        let _ = AppendMenuW(menu, MF_GRAYED | MF_STRING, 0, w!("Quick Actions"));
-        let _ = AppendMenuW(menu, MF_STRING, ID_SETTINGS as usize, w!("Open Settings"));
-        let _ = AppendMenuW(
-            menu,
-            MF_STRING,
-            ID_WELCOME as usize,
-            w!("Open Welcome Guide"),
-        );
-        let _ = AppendMenuW(
-            menu,
-            MF_STRING,
-            ID_OPEN_HISTORY as usize,
-            w!("Open Recordings Folder"),
-        );
-        let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
-        let _ = AppendMenuW(menu, MF_STRING, ID_ABOUT as usize, w!("About Dictator"));
+        let _ = AppendMenuW(menu, MF_STRING, ID_SETTINGS as usize, w!("Settings"));
         let _ = AppendMenuW(menu, MF_STRING, ID_EXIT as usize, w!("Exit"));
 
         let mut pt = Default::default();

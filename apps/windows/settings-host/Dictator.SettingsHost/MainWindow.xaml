@@ -15,7 +15,7 @@
                         OpenPaneLength="220"
                         SelectionChanged="OnNavChanged">
             <NavigationView.MenuItems>
-                <NavigationViewItem Content="Welcome" Tag="welcome"><NavigationViewItem.Icon><FontIcon Glyph="&#xE946;" /></NavigationViewItem.Icon></NavigationViewItem>
+                <NavigationViewItem Content="Dashboard" Tag="dashboard"><NavigationViewItem.Icon><FontIcon Glyph="&#xE946;" /></NavigationViewItem.Icon></NavigationViewItem>
                 <NavigationViewItem Content="Models" Tag="models"><NavigationViewItem.Icon><FontIcon Glyph="&#xE8F1;" /></NavigationViewItem.Icon></NavigationViewItem>
                 <NavigationViewItem Content="Runtime &amp; Device" Tag="runtime"><NavigationViewItem.Icon><FontIcon Glyph="&#xE9D9;" /></NavigationViewItem.Icon></NavigationViewItem>
                 <NavigationViewItem Content="Dictation" Tag="dictation"><NavigationViewItem.Icon><FontIcon Glyph="&#xE720;" /></NavigationViewItem.Icon></NavigationViewItem>
@@ -31,8 +31,8 @@
                     <StackPanel x:Name="WelcomePanel" Spacing="14" Visibility="Collapsed">
                         <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="12" Padding="16">
                             <StackPanel Spacing="14">
-                                <TextBlock Text="Welcome to Dictator" FontSize="24" FontWeight="SemiBold" />
-                                <TextBlock Text="Local voice dictation for desktop apps. Press hotkey, speak, release, text is inserted into active field." TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                <TextBlock Text="Dictator Dashboard" FontSize="24" FontWeight="SemiBold" />
+                                <TextBlock Text="Current mode, active model and recent transcriptions at a glance." TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
 
                                 <Grid ColumnSpacing="10">
                                     <Grid.ColumnDefinitions>
@@ -79,6 +79,22 @@
                                     <Button Content="Open Runtime" Click="OnGoToRuntimeClick" />
                                     <Button Content="Open Dictation" Click="OnGoToDictationClick" />
                                 </StackPanel>
+
+                                <Border Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="10" Padding="10">
+                                    <StackPanel Spacing="8">
+                                        <TextBlock Text="Recent Transcriptions" FontWeight="SemiBold" />
+                                        <ListView x:Name="DashboardRecentList" Height="220" SelectionMode="None">
+                                            <ListView.ItemTemplate>
+                                                <DataTemplate>
+                                                    <StackPanel Spacing="2">
+                                                        <TextBlock Text="{Binding Title}" FontWeight="SemiBold" />
+                                                        <TextBlock Text="{Binding Preview}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
+                                                    </StackPanel>
+                                                </DataTemplate>
+                                            </ListView.ItemTemplate>
+                                        </ListView>
+                                    </StackPanel>
+                                </Border>
                             </StackPanel>
                         </Border>
                     </StackPanel>
@@ -113,6 +129,7 @@
                                                         <StackPanel Spacing="5">
                                                             <TextBlock Text="{Binding Name}" FontSize="16" FontWeight="SemiBold" />
                                                             <TextBlock Text="{Binding StateLabel}" Foreground="{Binding StateBrush}" FontWeight="SemiBold" />
+                                                            <TextBlock Text="{Binding SuitabilityLine}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                                                             <TextBlock Text="{Binding Description}" TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                                                             <TextBlock Text="{Binding StatsLine}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                                                             <TextBlock Text="{Binding LanguageLine}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
@@ -120,7 +137,7 @@
                                                         </StackPanel>
 
                                                         <StackPanel Grid.Column="1" Spacing="8" VerticalAlignment="Top" HorizontalAlignment="Right" Width="170">
-                                                            <Button Width="136" HorizontalAlignment="Right" Content="Download"
+                                                            <Button Width="136" HorizontalAlignment="Right" Content="{Binding DownloadActionLabel}"
                                                                     Tag="{Binding Id}"
                                                                     Click="OnCatalogDownloadClick"
                                                                     Visibility="{Binding DownloadVisibility}"
@@ -189,7 +206,7 @@
                     <StackPanel x:Name="DictationPanel" Spacing="14" Visibility="Collapsed">
                         <Border Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="12" Padding="16">
                             <StackPanel Spacing="8">
-                                <TextBlock Text="Dictation Profile" FontSize="16" FontWeight="SemiBold" />
+                                <TextBlock Text="Current Behavior" FontSize="16" FontWeight="SemiBold" />
                                 <TextBlock x:Name="DictationProfileSummaryText" TextWrapping="Wrap" />
                                 <TextBlock x:Name="DictationLatencyHintText" TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                                 <TextBlock x:Name="DictationQualityHintText" TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
@@ -199,7 +216,7 @@
                         <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="12" Padding="16">
                             <StackPanel Spacing="12">
                                 <TextBlock Text="Transcription Mode" FontSize="16" FontWeight="SemiBold" />
-                                <TextBlock Text="Choose between lower-latency streaming and higher-stability full transcription." Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
+                                <TextBlock Text="Choose faster streaming updates or a single stable final pass." Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
                                 <ToggleSwitch x:Name="StreamingToggle" Header="Enable streaming transcription" Toggled="OnStreamingToggled" />
                                 <NumberBox x:Name="ChunkSecondsBox" Header="Streaming chunk interval (seconds)" Minimum="3" Maximum="60" ValueChanged="OnChunkValueChanged" />
                                 <TextBlock x:Name="ChunkHintText" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
@@ -244,7 +261,7 @@
                         <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="12" Padding="16">
                             <StackPanel Spacing="12">
                                 <TextBlock Text="Corrections Dictionary" FontSize="16" FontWeight="SemiBold" />
-                                <TextBlock Text="Deterministic replacements applied after transcription. Entries can be manual or auto-learned." Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
+                                <TextBlock Text="Text replacements applied after transcription. Entries can be manual, with optional auto-learn." Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
                                 <ToggleSwitch x:Name="CorrectionsToggle" Header="Enable corrections dictionary" Toggled="OnCorrectionsToggled" />
                                 <ToggleSwitch x:Name="CorrectionsAutoLearnToggle" Header="Auto-learn repeated corrections" Toggled="OnCorrectionsAutoLearnToggled" />
                                 <NumberBox x:Name="CorrectionsMinRepeatsBox" Header="Auto-learn minimum repeats" Minimum="2" Maximum="20" ValueChanged="OnCorrectionsMinRepeatsChanged" />
@@ -281,11 +298,8 @@
                     <StackPanel x:Name="HistoryPanel" Spacing="14" Visibility="Collapsed">
                         <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="12" Padding="16">
                             <StackPanel Spacing="12">
-                                <StackPanel Orientation="Horizontal" Spacing="8">
-                                    <Button Content="Refresh" Click="OnHistoryRefreshClick" />
-                                    <Button Content="Open Audio Folder" Click="OnOpenAudioFolder" />
-                                    <Button Content="Open Transcripts Folder" Click="OnOpenTranscriptsFolder" />
-                                </StackPanel>
+                                <TextBlock Text="Recent Dictations" FontSize="16" FontWeight="SemiBold" />
+                                <TextBlock Text="Browse saved recordings and transcripts, then copy, open or delete specific entries." Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
 
                                 <Grid ColumnSpacing="12">
                                     <Grid.ColumnDefinitions>
@@ -321,6 +335,12 @@
                                         </StackPanel>
                                     </Border>
                                 </Grid>
+
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <Button Content="Refresh" Click="OnHistoryRefreshClick" />
+                                    <Button Content="Open Audio Folder" Click="OnOpenAudioFolder" />
+                                    <Button Content="Open Transcripts Folder" Click="OnOpenTranscriptsFolder" />
+                                </StackPanel>
                             </StackPanel>
                         </Border>
                     </StackPanel>
