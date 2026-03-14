@@ -1,282 +1,293 @@
-# Next Sprints — Dictator Development Plan
+﻿# NEXT_SPRINTS — Dictator Platform Plan
 
-> Last updated: 2026-03-06
-
----
-
-## Current State
-
-- **Windows (Rust):** v0.3.0 in `apps/windows/`, build: `cd apps/windows && cargo build`
-- **macOS (Swift):** Prototype in `apps/macos/`, single-file `DictatorMacApp.swift` (~60KB)
-- **Shared:** Whisper server in `shared/whisper-server/`, contracts in `shared/contracts/`
-- **CI:** GitHub Actions — Windows CI on push, Release workflow on `v*` tags
+> Last updated: 2026-03-10
+> Planning mode: post-MVP reprioritization (Dictator + Contora convergence)
 
 ---
 
-## Sprint A: Windows — Phase 1 MVP+ ✅ DONE (2026-03-05)
+## 0) Reality Check (what is already done)
 
-**Commit:** `c666d24`
+- Windows Dictator already has core dictation pipeline, embedded Whisper backend, model download/switch, history, updater, and native settings window baseline.
+- macOS foundation is significantly advanced (modularized app, WhisperKit integration, streaming pipeline, hardening).
+- In Contora, there is already practical groundwork we can reuse:
+  - `HardwareDiagnosticsService` (GPU/CPU/RAM probing + CUDA recommendation)
+  - `SharedModelConfigService` + `SharedModelConfig` (installed runtime/model registry)
+  - `WhisperPaths` fallback chain and shared model root resolution.
 
-### A1: Smart Hotkeys ✅
-- LL keyboard hook (`SetWindowsHookExW`) — key down + key up events
-- Hold >300ms = Push-to-Talk (stops on release)
-- Tap <300ms = Toggle (stops on next press)
-- Key suppressed from target app
-
-### A2: Audio Waveform Overlay ✅
-- Lock-free RMS amplitude via `AtomicU32` in audio callback
-- 20-bar waveform, 30fps dedicated thread
-- Replaces blinking dot
-
-### A3: Flexible Text Injection ✅
-- `[injection] method = direct|clipboard|clipboard_enter`
-- clipboard mode preserves and restores original clipboard
-- `clipboard_enter` appends Enter after paste
-
-### A4: Model Selector in Tray ✅
-- Scans `whisper.models_dir` (defaults to parent of `model_path`)
-- Checkmark on active model, click saves to config.toml
-- New optional config field `whisper.models_dir`
+Conclusion: next value is not another isolated feature. Next value is **shared adaptive platform**.
 
 ---
 
-## Sprint B: macOS — MVP Foundation
+## 1) New Priority Stack (effective immediately)
 
-**Goal:** Get macOS client to feature parity with Windows basic pipeline.
-
-### B1: Modularize DictatorMacApp.swift ✅ DONE (2026-03-06)
-- Split 60KB single file into proper Swift modules:
-  - `AudioCaptureService.swift`
-  - `TranscriptionService.swift`
-  - `HotkeyManager.swift`
-  - `TextInjectionService.swift`
-  - `OverlayView.swift`
-  - `SettingsStore.swift`
-  - `AppState.swift`
-
-### B2: WhisperKit Integration ✅ DONE (2026-03-06)
-- Replace HTTP server dependency with WhisperKit (CoreML/Metal/ANE)
-- Evaluate performance on M1/M2/M3
-- Keep HTTP fallback for older Macs without ANE
-
-### B3: Text Injection Reliability ✅ DONE (2026-03-06)
-- Pasteboard + CGEvent (Cmd+V) as primary method
-- Accessibility permission flow with onboarding guide
-- Fallback: clipboard-only mode
-
-### B4: Streaming Transcription ✅ DONE (2026-03-06)
-- Chunk-based pipeline matching Windows behavior
-- Overlay/status panel for partial results
-
-### B5: Hardening + Archive Controls ✅ DONE (2026-03-06)
-- Fixed tray UX and toggle consistency:
-  - `Live Transcription` now switches reliably from first click
-  - `Settings...` moved near `Quit` for cleaner menu hierarchy
-- Overlay polish for Apple-style minimalism:
-  - reduced floating window width
-  - waveform centered vertically with symmetric top/bottom max-amplitude padding
-- Streaming reliability fixes:
-  - chunk retry policy (up to 3 retries)
-  - no forced loss-prone chunk cancellation during finalization
-  - if streaming is incomplete/fails, force full-pass fallback to avoid silent partial transcripts
-- Recording archive management (cross-platform learning for Windows):
-  - persisted archive folder stats in Settings (path, recording count, total size)
-  - open folder action
-  - retention policy options:
-    - Keep Everything
-    - Keep Last 5 Recordings
-    - Keep Last 3 Days
-    - Keep Last 5 Days
+1. Shared infrastructure between Dictator and Contora.
+2. Reliable hardware-aware runtime selection (works on weak/mid/high-end machines).
+3. Unified model catalog + shared model storage (no duplicate downloads).
+4. Full settings UX for runtime/model/hardware control.
+5. Optional cloud fallback architecture (design first, implementation later).
 
 ---
 
-## Sprint C: Shared Infrastructure
+## 2) Sprint N — Shared Foundation Audit + Contracts (P0)
 
-### C1: Shared Whisper Models Directory ✅ DONE (2026-03-06)
-- Both Dictator and Contora point to same model files
-- Resolution order: config `models_dir` → `WHISPER_MODELS_DIR` env var → `%LocalAppData%\whisper-models\` (if exists) → `model_path` parent
-- Environment variable override: `WHISPER_MODELS_DIR`
+**Goal:** define and lock shared contracts before coding adapters.
 
-### C2: Memory Management ✅ DONE (2026-03-06)
-- Auto-unload whisper engine after idle (default: 5 min)
-- Config: `[memory] idle_unload_minutes` (0 = never)
-- `idle_unload_minutes` configurable via Settings window
+### N1. Cross-project inventory (Dictator + Contora)
+- Map overlapping concerns: model paths, model metadata, runtime selection, hardware diagnostics, settings semantics.
+- Produce compatibility matrix: `Dictator Rust` vs `Contora .NET`.
 
-### C3: History Module ✅ DONE (earlier)
-- JSON metadata + WAV audio + TXT per recording in `recordings/YYYY-MM-DD/`
-- Configurable retention_days (default 7), max_recent in tray (default 5)
-- "Open Folder" and "Copy to Clipboard" tray actions
+### N2. Shared contract draft (`shared/contracts/runtime`)
+- Define JSON schemas:
+  - `hardware_profile.v1.json`
+  - `runtime_policy.v1.json`
+  - `model_catalog.v1.json`
+  - `shared_model_store.v1.json`
+- Include schema versioning + migration field.
 
----
+### N3. ADR package (architecture decisions)
+- Canonical shared root (desktop): `%LocalAppData%/AudioModels`.
+- Atomic writes + lock strategy for cross-process updates.
+- Conflict strategy when both apps change active model.
 
-## Sprint D: Research & Evaluation
+### Deliverables
+- `docs/SHARED_RUNTIME_ADR.md`
+- `shared/contracts/runtime/*.json`
+- `docs/DICTATOR_CONTORA_COMPAT_MATRIX.md`
 
-### D1: Parakeet V3 (NVIDIA NeMo)
-- Evaluate as alternative/complement to Whisper
-- CPU-friendly (~5x realtime), auto language detection
-- Reference: Handy integration (MIT licensed)
-
-### D2: Model Comparison Matrix
-- Test on identical audio samples:
-  - whisper-rs GGML large-v3 (CPU + CUDA)
-  - Parakeet V3 (CPU + CUDA)
-  - WhisperKit (Apple Silicon)
-  - Distil-Whisper (faster, lower quality)
-- Metrics: latency, WER (word error rate), VRAM usage, CPU usage
-
-### D3: Embedded Whisper (whisper-rs) ✅ DONE (2026-03-06)
-
-**New default backend — no Python required.**
-
-#### Architecture
-- `whisper_engine.rs`: module wrapping `whisper-rs 0.14`
-- `SharedEngine = Arc<Mutex<Option<WhisperEngine>>>` — lazy load, idle unload
-- `config.whisper.backend`: `"embedded"` (default) | `"server"` (legacy Python)
-
-#### Prerequisites
-- **Model**: download GGML `.bin` from https://huggingface.co/ggerganov/whisper.cpp
-  - Place in `%LocalAppData%\whisper-models\` (shared with Contora)
-  - Or download from within the app: Settings → Download Model
-- **GPU**: build with `cargo build --features cuda` (requires CUDA Toolkit)
-- **CPU**: default build, no extra dependencies
+### Definition of Done
+- Both apps can parse the same contract files without ambiguity.
+- Storage contract includes corruption recovery rules.
 
 ---
 
-## Sprint E: Windows Quality of Life ✅ DONE (2026-03-06)
+## 3) Sprint O — Hardware Profiler Module (P0)
 
-### E1: Single-Instance Enforcement
-- Named mutex `Global\DictatorSingleInstance` at startup
-- If already running → MessageBox "Check system tray" + clean exit
+**Goal:** introduce reusable hardware capability module for all desktop targets.
 
-### E2: Ollama Toggle in Tray → moved to Settings window
-- Runtime toggle for LLM correction, independent of config.toml
+### O1. Shared module design
+- Build a reusable `hardware-profile` core (target: Rust core + per-platform adapters).
+- Fields:
+  - OS + architecture
+  - CPU model, physical/logical cores, max frequency
+  - RAM total/available
+  - GPU vendor/model/VRAM
+  - accelerator capabilities (CUDA/Metal/DirectML/none)
+  - confidence score per metric
 
-### E3: Open Config File from Tray → moved to Settings window (About section)
+### O2. Adapter strategy
+- Windows adapter: use Contora learnings (64-bit probing, robust VRAM detection, `nvidia-smi` fallback).
+- llmfit alignment: borrow multi-GPU normalization strategy and backend capability flags from `llmfit-core/src/hardware.rs`.
+- macOS adapter: Metal device capabilities + unified memory context.
+- Linux adapter: conservative baseline (NVIDIA/AMD/Intel + RAM/CPU), robust fallbacks.
 
----
+### O3. Scoring and tiering
+- Produce deterministic output:
+- scoring method: weighted profile inspired by `llmfit-core/src/fit.rs` with Dictator-specific latency constraints.
+  - `tier = high | medium | low`
+  - `recommended_device = cuda | metal | cpu`
+  - `recommended_model_profile = quality | balanced | fast`
 
-## Sprint F: UX Polish ✅ DONE (2026-03-06)
+### Deliverables
+- `shared/runtime/hardware-profile` module (or equivalent shared package)
+- `docs/HARDWARE_SCORING_RULES.md`
+- cross-platform sample output fixtures
 
-### F1: Whitespace Normalization
-- `raw_text.split_whitespace().join(" ")` after transcription
-- Fixes faster-whisper double-space issue
-
-### F2: Model Size in Tray Selector
-- Shows e.g. "large-v3 (3.1 GB)" in tray model menu
-
-### F3: Long Recording Notification
-- After 30s of recording, overlay appends: "Tip: tap hotkey again to stop"
-
----
-
-## Sprint G: CLI Remote Control + About ✅ DONE (2026-03-06)
-
-### G1: CLI --toggle / --stop via Named Windows Events
-- `dictator.exe --toggle` — toggles recording
-- `dictator.exe --stop` — stops recording silently
-
-### G2: About Dialog
-- Moved to Settings window → About section
-
----
-
-## Sprint H: In-App Model Downloader ✅ DONE (2026-03-06)
-
-### H1: GGML Model Download
-- `model_downloader.rs`: known models list (tiny/base/small/medium/large-v3-turbo/large-v3)
-- Downloads from `huggingface.co/ggerganov/whisper.cpp` via streaming HTTP
-- Atomic write: temp file + rename on completion
-- Progress shown in overlay: "Downloading large-v3 (47%)"
-- After success: hot-switches to new model (no restart needed)
-- Startup hint: if no model found, overlay shows instructions for 6 seconds
+### Definition of Done
+- Same machine always returns stable profile output.
+- Missing probe sources degrade gracefully, not crash.
 
 ---
 
-## Sprint I: Right Ctrl Hotkey + Hot Reload ✅ DONE (2026-03-06)
+## 4) Sprint P — Unified Model Catalog + Shared Store (P0)
 
-### I1: Switch hotkey from Right Alt to Right Ctrl
-- VK_RCONTROL (0xA3) instead of VK_RMENU (0xA5)
-- Right Alt conflicts with Birman typographic keyboard layout
+**Goal:** one source of truth for models/runtimes used by both apps.
 
-### I2: Hot model reload without restart
-- `Arc<RwLock<PathBuf>>` shared between UI and event thread
-- Model switch or download → update path + unload engine → next recording auto-loads new model
+### P1. Canonical model catalog
+- Build catalog with required metadata:
+  - id, family, quantization/runtime compatibility
+  - expected RAM/VRAM tiers
+  - quality/speed labels
+  - disk footprint
+  - language/domain notes
+- Include first supported families:
+  - Whisper GGML/whisper-rs compatible models
+  - faster-whisper model variants
+  - Parakeet candidates (research-gated)
 
----
+### P2. Shared model store service
+- Read/write index of installed models/runtimes.
+- Atomic register/unregister APIs.
+- Health checks for partial or corrupted installations.
+- File lock to prevent race between Dictator and Contora installers.
 
-## Sprint K: Tray Cleanup ✅ DONE (2026-03-06)
+### P3. Discovery and migration
+- Detect legacy app-local model folders and import into shared index.
+- Preserve active selection where possible.
 
-### K1: Slim tray — quick actions only
-- Removed: streaming controls, chunk size, download submenu
-- Kept: model quick-switch, last 3 recordings, Open Recordings Folder, Settings, Exit
-- Added "Settings..." → opens settings window
-- Added "Install Update vX.X" (shown only when update is available)
+### Deliverables
+- `shared/runtime/model-store` module
+- `shared/runtime/model-catalog/catalog.v1.json`
+- migration utility docs
 
----
-
-## Sprint L: Native Win32 Settings Window ✅ DONE (2026-03-06)
-
-### L1: Settings window
-- `settings_window.rs` — native Win32 window, no external UI framework
-- Triggered from tray → "Settings..."
-- Sections:
-  - **Models** — installed list, Use / Delete buttons
-  - **Download** — model dropdown + Download button
-  - **General** — injection method, idle unload, LLM toggle, Ollama URL/model
-  - **About** — version, hotkey, Open Logs, Open Config
-- `GWLP_USERDATA` pattern for per-window state, `WM_SETFONT` for system font
-
----
-
-## Sprint M: Auto-Updater (Velopack) ✅ DONE (2026-03-06)
-
-### M1: Velopack integration
-- `updater.rs` with `velopack::sources::HttpSource` → GitHub Releases feed
-- `VelopackApp::build().run()` as first call in `main()`
-- Background update check on startup
-- Tray: "Install Update vX.X" shown when update available
-- On click: download + `apply_updates_and_restart()`
-
-### M2: GitHub Actions release workflow
-- `.github/workflows/release.yml` — triggers on `v*` tag push
-- Steps: checkout → LLVM install → `cargo build --release` → `vpk pack` → GitHub Release
-- Publishes: `dictator-win-Setup.exe`, `dictator-win-Portable.zip`, `dictator-X.X.X-full.nupkg`, `releases.win.json`
-- First release: v0.3.0
+### Definition of Done
+- Model downloaded by app A is visible and selectable in app B without duplicate download.
 
 ---
 
-## Up Next
+## 5) Sprint Q — Adaptive Runtime Policy Engine (P0/P1)
 
-### Sprint N: macOS — MVP Foundation (Sprint B)
-- B1+B2+B3+B4 complete
-- macOS development done on macOS machine directly
+**Goal:** ensure transcription works on any desktop with correct backend/model path.
 
-### Sprint O: Custom Dictionary Editor
-- GUI in Settings window for adding word substitutions
-- Written to a vocabulary file, passed to whisper on load
+### Q1. Policy engine
+- Inputs: hardware profile + installed models + user preference.
+- Output:
+  - backend selection (embedded/server/faster-whisper/etc.)
+  - device (cuda/metal/cpu)
+  - model candidate order
+  - fallback chain.
 
-### Sprint P: Command Mode (Research)
-- Capture selected text + voice command → LLM rewrite → inject result
-- Investigate accessibility API for selected text capture on Windows
+### Q2. Failure-aware fallback
+- If selected backend fails, fallback deterministically.
+- Store diagnostics reason for next launch.
+
+### Q3. User control modes
+- `Auto` (recommended)
+- `Force GPU`
+- `Force CPU`
+- `Force specific model`
+- clear warning when override reduces reliability.
+
+### Deliverables
+- `shared/runtime/policy-engine`
+- policy tests for High/Mid/Low hardware fixtures
+
+### Definition of Done
+- First transcription succeeds across representative low/mid/high hardware fixtures (local test matrix).
 
 ---
 
-## Priority Order
+## 6) Sprint R — Full Settings Window 2.0 (P0/P1)
 
-1. **Sprint A** ✅ DONE
-2. **Sprint C1** ✅ DONE
-3. **Sprint C2** ✅ DONE
-4. **Sprint C3** ✅ DONE
-5. **Sprint E** ✅ DONE
-6. **Sprint F** ✅ DONE
-7. **Sprint G** ✅ DONE
-8. **Sprint D3** ✅ DONE
-9. **Sprint H** ✅ DONE
-10. **Sprint I** ✅ DONE
-11. **Sprint K** ✅ DONE
-12. **Sprint L** ✅ DONE
-13. **Sprint M** ✅ DONE
-14. **Sprint B1-B4** (macOS) — macOS machine only
-15. **Sprint D1-D2** (model research) — informs future architecture
-16. **Sprint O** (dictionary editor)
-17. **Sprint P** (command mode)
+**Goal:** move from tray-first control to scalable settings UX.
+
+### R1. Information architecture
+Sections:
+- Models
+- Runtime & Device
+- Hardware Diagnostics
+- Shared Storage
+- Dictation/Injection
+- History
+- Hotkeys
+- About & Diagnostics
+
+### R2. Models UX
+- install / delete / set active
+- disk usage
+- compatibility badges by current hardware tier
+- "download once, available in both apps" explanation
+
+### R3. Runtime UX
+- show current auto decision and why (e.g. `Auto -> CPU`, no CUDA-compatible GPU)
+- expose fallback status and last errors
+
+### Deliverables
+- updated native settings window in Dictator
+- shared UI copy/spec for Contora parity
+
+### Definition of Done
+- User can fully configure runtime/model flow without editing config files.
+
+---
+
+## 7) Sprint S — Contora Integration Pass (P1)
+
+**Goal:** wire shared modules into Contora and validate cross-app behavior.
+
+### S1. Integrate shared contracts
+- Contora reads/writes same model store/index schema.
+
+### S2. Integrate hardware profile output
+- Replace ad-hoc hardware recommendation path with shared scoring output.
+
+### S3. End-to-end scenarios
+- Install model in Dictator -> visible in Contora.
+- Change active model in Contora -> visible in Dictator.
+- Broken model files -> both apps surface same health warning.
+
+### Deliverables
+- `docs/DICTATOR_CONTORA_E2E_TESTS.md`
+- compatibility test checklist
+
+---
+
+## 8) Sprint T — Research Track (parallel, non-blocking)
+
+### T1. External hardware-profiling references
+- Evaluate llmfit (https://github.com/AlexsJones/llmfit) as primary benchmark for cross-platform detection and model recommendation heuristics.
+- Map reusable ideas into Dictator/Contora modules: hardware capability graph (`hardware.rs`), recommendation scoring (`fit.rs`), provider abstraction (`providers.rs`).
+- Extract only portable, license-safe ideas.
+
+### T2. Cloud fallback architecture (design only)
+- define provider abstraction and privacy model
+- cloud remains optional/off by default
+
+---
+
+## 9) Immediate Execution Order (what we start first)
+
+1. Sprint N (contracts + ADR + compatibility matrix)
+2. Sprint O (hardware profiler module)
+3. Sprint P (shared model catalog/store)
+4. Sprint U (expanded model stack: Canary/Granite/cloud candidate track)
+5. Sprint Q (adaptive runtime policy engine with expanded catalog)
+6. Sprint R (settings window 2.0 integration)
+
+---
+
+## 10) Open Inputs Needed
+
+- Confirm which llmfit-derived scoring dimensions we lock first for v1 (`quality/speed/fit/context` or reduced subset).
+- Confirm whether shared dictionary should be included in current cycle (or moved to next cycle after model/runtime stabilization).
+- Confirm first Linux support scope (full app vs runtime module only).
+
+
+
+
+## 11) Sprint U — Expanded STT Model Stack (P0/P1)
+
+**Goal:** add new model families for stronger accuracy/speed coverage and keep one unified catalog for Dictator + Contora.
+
+### U1. Candidate validation batch
+- Evaluate candidates from current benchmark signals:
+  - ElevenLabs Scribe v2 (cloud, optional track)
+  - NVIDIA Canary Qwen 2.5B (local, high-accuracy GPU track)
+  - IBM Granite Speech 3.3 8B (local, heavy high-accuracy track)
+  - Keep Parakeet TDT 0.6B V2 as speed baseline.
+- Produce reproducible internal comparison (WER-like proxy, latency, memory footprint, stability).
+
+### U2. Runtime/backend feasibility for Windows-first
+- Define backend integration path per candidate (local runtime, dependencies, packaging constraints).
+- Lock minimum hardware gates (VRAM/RAM/CPU class) for each model family.
+
+### U3. Catalog + policy integration
+- Extend unified catalog metadata with new fields:
+  - `min_vram_gb`, `min_ram_gb`, `language_scope`, `quality_tier`, `speed_tier`, `deployment_mode(local|cloud)`.
+- Wire candidates into adaptive policy recommendations by hardware tier.
+
+### U4. Settings UX integration
+- Show per-model cards with clear labels:
+  - hardware requirements,
+  - expected speed/quality profile,
+  - local/cloud indicator,
+  - recommended/not recommended message for current machine.
+
+### Deliverables
+- Updated `shared/runtime/model-catalog/catalog.v1.json`
+- `docs/MODEL_EVALUATION_MATRIX.md`
+- Policy rules update for new families
+
+### Definition of Done
+- At least one non-Whisper local high-accuracy family is integrated end-to-end in Windows flow.
+- Model recommendations in Settings are hardware-aware and explainable.
+

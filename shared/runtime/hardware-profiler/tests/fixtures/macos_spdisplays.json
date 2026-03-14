@@ -1,0 +1,12 @@
+{
+  "SPDisplaysDataType": [
+    {
+      "_name": "display",
+      "sppci_model": "Apple M3 Max"
+    },
+    {
+      "_name": "display",
+      "sppci_model": "AMD Radeon Pro 5600M"
+    }
+  ]
+}

@@ -1,0 +1,152 @@
+﻿{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/iamniketas/dictator/shared/contracts/runtime/hardware_profile.v1.json",
+  "title": "Hardware Profile Contract v1",
+  "description": "Cross-platform machine capability profile shared by Dictator and Contora.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "generated_at_unix_s",
+    "host",
+    "cpu",
+    "memory",
+    "gpus",
+    "accelerators",
+    "tier",
+    "confidence"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "hardware_profile.v1"
+    },
+    "generated_at_unix_s": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "source_app": {
+      "type": "string",
+      "enum": ["dictator", "contora", "unknown"],
+      "default": "unknown"
+    },
+    "host": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["os", "arch"],
+      "properties": {
+        "os": {
+          "type": "string",
+          "enum": ["windows", "macos", "linux", "unknown"]
+        },
+        "os_version": {
+          "type": "string"
+        },
+        "arch": {
+          "type": "string",
+          "enum": ["x86_64", "arm64", "x86", "unknown"]
+        },
+        "device_name": {
+          "type": "string"
+        }
+      }
+    },
+    "cpu": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["model", "physical_cores", "logical_cores"],
+      "properties": {
+        "vendor": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "physical_cores": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "logical_cores": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_clock_mhz": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "memory": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["total_mb"],
+      "properties": {
+        "total_mb": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "available_mb": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "gpus": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "vendor", "is_integrated", "vram_mb"],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "vendor": {
+            "type": "string",
+            "enum": ["nvidia", "amd", "intel", "apple", "unknown"]
+          },
+          "is_integrated": {
+            "type": "boolean"
+          },
+          "vram_mb": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "cuda_compatible": {
+            "type": "boolean"
+          },
+          "metal_compatible": {
+            "type": "boolean"
+          },
+          "directml_compatible": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "accelerators": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cuda", "metal", "directml"],
+      "properties": {
+        "cuda": { "type": "boolean" },
+        "metal": { "type": "boolean" },
+        "directml": { "type": "boolean" },
+        "rocm": { "type": "boolean" }
+      }
+    },
+    "tier": {
+      "type": "string",
+      "enum": ["high", "medium", "low", "unknown"]
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "notes": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  }
+}
+

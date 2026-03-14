@@ -9,5 +9,7 @@ export WHISPER_PORT
 
 echo "Starting Whisper server on port ${WHISPER_PORT}..."
 echo "Model source: default repo path (models/faster-whisper-large-v2) unless WHISPER_MODEL_PATH/WHISPER_MODEL/CLI arg is set."
+echo "Backends: faster-whisper + transformers ASR (Canary/Granite/Parakeet refs)."
+echo "If needed, install deps: pip install -r requirements.txt"
 
 python3 whisper_server.py "$@"

@@ -51,14 +51,11 @@ impl WhisperServerManager {
 
         if self.child.is_none() {
             let script = find_server_script()?;
-            let model_arg = if std::path::Path::new(&self.model_path).exists() {
-                Some(self.model_path.as_str())
-            } else {
-                warn!(
-                    "[WHISPER] Configured model path does not exist: {}. Using server default path.",
-                    self.model_path
-                );
+            let model_arg = if self.model_path.trim().is_empty() {
+                warn!("[WHISPER] Model path is empty. Using server default path.");
                 None
+            } else {
+                Some(self.model_path.as_str())
             };
             info!(
                 "[WHISPER] Starting local server: {} {}",
@@ -111,6 +108,10 @@ impl WhisperServerManager {
         self.owns_process = false;
     }
 
+    pub fn set_model_path(&mut self, model_path: String) {
+        self.model_path = model_path;
+    }
+
     pub fn is_server_running(&self) -> bool {
         self.child.is_some()
     }
@@ -133,8 +134,11 @@ impl WhisperServerManager {
 }
 
 fn spawn_server_process(script: &Path, model_path: Option<&str>) -> Result<Child> {
-    // pythonw prevents a visible console window; fallback to python if unavailable.
-    let candidates = ["pythonw", "python"];
+    // On Windows we only use GUI Python launchers to avoid any console flash.
+    #[cfg(target_os = "windows")]
+    let candidates = ["pythonw", "pyw"];
+    #[cfg(not(target_os = "windows"))]
+    let candidates = ["python3", "python"];
     let mut last_error: Option<anyhow::Error> = None;
 
     for exe in candidates {
@@ -199,3 +203,7 @@ fn find_server_script() -> Result<PathBuf> {
 
     anyhow::bail!("whisper_server.py not found in expected locations")
 }
+
+
+
+

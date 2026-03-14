@@ -42,6 +42,8 @@ pub struct StreamingTranscriber {
     engine: Option<SharedEngine>,
     /// Model path (used when engine is Some)
     model_path: PathBuf,
+    /// Whether embedded engine should prefer GPU when available
+    prefer_gpu: bool,
 }
 
 impl StreamingTranscriber {
@@ -59,6 +61,7 @@ impl StreamingTranscriber {
             chunk_duration_secs: chunk_duration_secs.max(1),
             engine: None,
             model_path: PathBuf::new(),
+            prefer_gpu: true,
         }
     }
 
@@ -69,6 +72,7 @@ impl StreamingTranscriber {
         chunk_duration_secs: u64,
         engine: SharedEngine,
         model_path: PathBuf,
+        prefer_gpu: bool,
     ) -> Self {
         Self {
             event_tx,
@@ -78,6 +82,7 @@ impl StreamingTranscriber {
             chunk_duration_secs: chunk_duration_secs.max(1),
             engine: Some(engine),
             model_path,
+            prefer_gpu,
         }
     }
 
@@ -100,6 +105,7 @@ impl StreamingTranscriber {
         let chunk_duration = Duration::from_secs(chunk_duration_secs);
         let engine = self.engine.clone();
         let model_path = self.model_path.clone();
+        let prefer_gpu = self.prefer_gpu;
 
         // Spawn simple thread with sleep-based polling
         let handle = thread::spawn(move || {
@@ -210,7 +216,7 @@ impl StreamingTranscriber {
 
                 // Send to Whisper (blocking call, but in separate thread)
                 let transcribe_result = match &engine {
-                    Some(eng) => transcribe_with_engine(eng, &model_path, audio_to_process, &language),
+                    Some(eng) => transcribe_with_engine(eng, &model_path, audio_to_process, &language, prefer_gpu),
                     None => transcribe_audio(audio_to_process, &language),
                 };
                 match transcribe_result {
@@ -264,23 +270,20 @@ impl StreamingTranscriber {
         info!("[STREAMING] Thread spawned successfully");
     }
 
-    /// Stop streaming transcription
+    /// Stop streaming transcription (non-blocking).
+    ///
+    /// We intentionally do not `join()` here to avoid blocking RecordStop when
+    /// a heavy model is still transcribing a chunk.
     pub fn stop(&mut self) {
-        info!("[STREAMING] Stopping...");
+        info!("[STREAMING] Stopping (non-blocking)...");
 
-        // Signal stop
+        // Signal stop.
         self.stop_signal.store(true, Ordering::SeqCst);
 
-        // Wait for thread to finish
-        if let Some(handle) = self.thread_handle.take() {
-            info!("[STREAMING] Waiting for thread to finish...");
-            match handle.join() {
-                Ok(_) => info!("[STREAMING] Thread finished successfully"),
-                Err(_) => error!("[STREAMING] Thread panicked!"),
-            }
+        // Detach worker handle. Thread will exit on its own after current cycle.
+        if self.thread_handle.take().is_some() {
+            info!("[STREAMING] Stop signal sent; worker detached");
         }
-
-        info!("[STREAMING] Stopped");
     }
 
     /// Check if streaming is active
@@ -297,3 +300,10 @@ impl Drop for StreamingTranscriber {
         }
     }
 }
+
+
+
+
+
+
+

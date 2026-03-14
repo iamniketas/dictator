@@ -1,203 +1,199 @@
+﻿# ROADMAP — Dictator (Updated Product Direction)
 
-## ШАГ 1: Извлечение и классификация функций
+> Last updated: 2026-03-10
+> Status: active rewrite after macOS + Windows baseline completion
 
-|Функция|Источник|Вердикт|Категория|
-|---|---|---|---|
-|Выбор модели в UI с сравнением (скорость/качество/языки)|Handy|ХОЧУ|Core|
-|Визуальный оверлей с реальной формой волны (громкость)|Handy / Monologue|ХОЧУ|UX|
-|Умные хоткеи: удерживание (PTT) vs двойной клик (Toggle/Hands-free)|Wispr Flow / Monologue|ХОЧУ|Integration|
-|Автосброс моделей из памяти (VRAM/RAM) при простое|Handy|ХОЧУ|Core|
-|Разные методы вставки: Direct Input (SendInput), Clipboard, Auto-send|Handy / Wispr Flow|ХОЧУ|Integration|
-|История записей с возможностью прослушивания аудио и копирования текста|Handy / Wispr Flow|ХОЧУ|UX|
-|Постобработка LLM по отдельному хоткею (коррекция/структурирование)|Handy|ХОЧУ|Core|
-|Автодобавление пробела в конце транскрипта|Handy|НЕЙТРАЛЬНО|Integration|
-|Словарь кастомных слов (имена, термины) без редактирования конфига|Handy / Wispr Flow|ХОЧУ|Core|
-|Корпоративный словарь (синхронизация с командой)|Wispr Flow|НЕЙТРАЛЬНО|P3 (Advanced)|
-|Command Mode: AI-редактирование выделенного текста (сделать короче/формальнее)|Wispr Flow / Monologue|ХОЧУ|Advanced|
-|Компактная настройка (настройки не загромождают экран, всё в треи/меню)|Handy|ХОЧУ|UI|
-|Персистентный виджет на экране (всегда видно, что запись идет)|Monologue / Wispr Flow|НЕ ХОЧУ|Anti-pattern|
-|Принудительное ограничение слов для локальных моделей (Freemium model)|Monologue|НЕ ХОЧУ|Business|
-|Запрос лишних прав (доступ к экрану ради "контекста" без объяснений)|Monologue|НЕ ХОЧУ|Anti-pattern|
-|Сниппеты (вставка готовых фраз по ключевому слову)|Wispr Flow / Handy|НЕЙТРАЛЬНО|P2|
-|Статистика использования (WPM, количество записей) в главном окне|Wispr Flow / Monologue|НЕЙТРАЛЬНО|UX|
-|Уведомление при долгой записи с подсказкой о Hands-free режиме|Wispr Flow|ХОЧУ|UX|
+## 1) Product North Star
 
----
+Dictator evolves from a "voice typing app" into a **hardware-adaptive local transcription platform** that:
+- runs reliably on weak, mid, and high-end desktops,
+- shares runtime/model infrastructure with Contora,
+- avoids duplicate model downloads across apps,
+- keeps local-first behavior by default,
+- is ready for future cloud fallback and mobile clients.
 
-## ШАГ 2: Фильтрация и приоритизация
+## 2) What Changed (Priority Reset)
 
-### P0 (Must have) — Фундамент
+Previous roadmap focused on MVP dictation UX features. Most of that baseline already exists.
+Current bottleneck is no longer "another feature" (e.g. dictionary), but **platform reliability + shared infrastructure**:
+- common model space for Dictator + Contora,
+- cross-platform hardware detection and scoring,
+- adaptive backend/model routing by machine capabilities,
+- scalable settings UX for many options.
 
-_Без этого Dictator не работает как конкурентоспособный инструмент._
+## 3) Strategic Goals (Now)
 
-1. Динамическая загрузка моделей
-    
-    - Описание: Возможность выбора модели в GUI без перезапуска приложения, с индикацией загрузки/разгрузки.
-    - Почему: "Главное, что пользователю сразу рекомендуется, что выбрать" (Handy). Текущий конфиг TOML сложен для массового юзера.
-    - Сложность: MEDIUM (Rust + GUI binding)
-    - Зависимости: UI Settings, Core Engine.
-    - Архитектура: Совместимо с Rust. Требует управления жизненным циклом `faster-whisper` инстансов.
-2. Гибкие методы ввода (Hotkeys Logic)
-    
-    - Описание: Реализация двух режимов: Push-to-Talk (удержание) и Toggle (одна кнопка старт/стоп). Желательно разделение через количество кликов (как Wispr Flow).
-    - Почему: "Такой вариант удобнее, чем переключение режима в настройках... интуитивно понятно" (Wispr Flow).
-    - Сложность: MEDIUM
-    - Зависимости: Core Audio Capture.
-    - Архитектура: Rust + Win32 hook.
-3. Оверлей с визуализацией активности
-    
-    - Описание: Окно поверх экрана, показывающее волну микрофона (уровень громкости) в реальном времени и статус транскрипции.
-    - Почему: "Позволяет понять, действительно ли приложение сейчас слышит... насколько ты громко говоришь" (Handy).
-    - Сложность: LOW
-    - Зависимости: Core Audio, UI Overlay.
-    - Архитектура: Win32 Topmost Window или DirectX/OpenGL контекст поверх окна.
-4. Вставка текста (Injection) без трения
-    
-    - Описание: Автоматическая вставка текста в активное окно при нажатии хоткея, либо копирование в буфер без изменения текущего содержимого буфера.
-    - Почему: "Основной сценарий... расшифрованные текст вставляется в текстовое поле" (Handy). Важна функция не перезаписывать настоящий буфер обмена.
-    - Сложность: LOW (уже есть SendInput, нужно доработать логику буфера).
-    - Зависимости: Core Injection.
+### G1. Shared Foundation Across Dictator + Contora (P0)
+Build shared modules and contracts so both apps can reuse one stack for:
+- hardware profiling,
+- model catalog and installed-state index,
+- model storage location,
+- common metadata/config compatibility.
 
-### P1 (Should have) — Стабильный опыт
+### G2. "Works on Any Desktop" Reliability (P0)
+Define runtime strategy for:
+- NVIDIA GPU systems (fast local GPU path),
+- CPU-only / weak GPU systems (optimized local CPU path),
+- low-resource systems (graceful degraded mode now, cloud fallback later).
 
-5. Автосброс памяти (Memory Management)
-    
-    - Описание: Таймер бездействия для выгрузки моделей из VRAM/RAM, чтобы не "засирать" память.
-    - Почему: "Важно такую настройку сделать и поддерживать... чтобы не засирать пользователям оперативную память или видеопамять" (Handy).
-    - Сложность: HIGH (Требует точного контроля ресурсов CUDA/Rust allocator).
-    - Зависимости: Core Engine.
-6. Постобработка (LLM Correction) по хоткею
-    
-    - Описание: Дополнительный хоткей для "полировки" сырого транскрипта через локальную LLM (Ollama) с возможностью отмены (Show raw vs Show polished).
-    - Почему: "Полезно для того, чтобы исправить опечатки... структурировать" (Handy). Wispr Flow делает это всегда, но автор хочет контроль.
-    - Сложность: MEDIUM
-    - Зависимости: Local LLM integration.
-7. История транскрипций
-    
-    - Описание: Хранение последних записей с текстом и ссылкой на аудиофайл внутри приложения.
-    - Почему: "Раздел истории очень удобен, как раз для таких ситуаций... текст никуда не вставился" (Handy).
-    - Сложность: MEDIUM
-    - Зависимости: File Storage System.
+### G3. Unified Model Experience (P0)
+User downloads model once, both apps see it.
+Both apps can:
+- discover installed models,
+- validate compatibility,
+- show recommended options for current hardware.
 
-### P2 (Nice to have) — Улучшение UX
+### G4. Full Settings UX (P0/P1)
+Move from tray-centric controls to a full settings window with sections for:
+- Models & Runtime,
+- Hardware profile,
+- Recording/Transcription behavior,
+- Shared storage,
+- History,
+- Hotkeys,
+- About/Diagnostics.
 
-8. Кастомизация словаря
-    
-    - Описание: GUI для добавления слов-субтитров (неправильно -> правильно), без правки конфига вручную.
-    - Почему: "Модели... поддерживают словарь, здесь можно добавить конкретные слова" (Handy/Wispr Flow).
-    - Сложность: MEDIUM
-    - Зависимости: Core Engine (Whisper config update).
-9. Уведомление при долгой записи
-    
-    - Описание: Toast-сообщение или анимация в оверлее: "Удерживать устало? Нажмите дважды для Hands-free".
-    - Почему: "Очень классное интуитивное решение — не бомбить... а именно показать... когда оно будет актуально" (Wispr Flow).
-    - Сложность: LOW
-    - Зависимости: UI Overlay.
-10. Выбор метода вставки
-    
-    - Описание: Настройка: Вставить и нажать Enter / Вставить с пробелом / Просто скопировать.
-    - Почему: "Настроить работу с буфером обмена... автоотправки текста" (Handy).
-    - Сложность: LOW
+### G5. Future-Ready Architecture (P1/P2)
+Prepare extension points for:
+- optional cloud acceleration fallback,
+- account-level sync (dictionary/preferences) in future,
+- native iOS/Android clients.
 
-### P3 (Research) — Будущее
+## 4) Product Principles (Must Keep)
 
-11. Command Mode
-    - Описание: Режим, где выделенный текст отправляется в LLM для переписывания (сделать короче, пересказать).
-    - Почему: "Голосовой интерфейс... становится центром управления всего... проще чем платить какому-то ещё провайдеру" (Wispr Flow).
-    - Сложность: HIGH (Требует захвата выделенного текста из окна и UI для редактирования).
+- Local-first by default.
+- No hidden cloud processing.
+- No duplicate model downloads when both apps are installed.
+- Transparent runtime choice (show why backend/model was selected).
+- Minimal required permissions.
 
----
+## 5) Architecture Priorities
 
-## ШАГ 3: Группировка в Epic/Story блоки
+### A. Shared Module Layer (Dictator + Contora)
+Create a reusable shared runtime package (naming TBD, e.g. `shared/runtime-core`) containing:
+- `hardware_profile` (detect CPU/GPU/RAM/OS + capabilities),
+- `hardware_scoring` (tier classification and confidence),
+- `model_catalog` (canonical list of supported models/backends),
+- `model_store` (discover/install/remove/validate shared model files),
+- `runtime_policy` (rules to choose backend/model by hardware + user preference).
 
-### Epic 1: Core Recording & Input Experience
+Implementation references for current cycle:
+- Contora: HardwareDiagnosticsService, SharedModelConfigService, WhisperPaths.
+- llmfit: cross-platform hardware.rs (multi-GPU, backend detection), fit.rs (Q/S/F/C scoring), providers.rs (provider abstraction: Ollama/llama.cpp/MLX).
 
-Цель: Сделать процесс начала записи и вывода текста мгновенным и надежным. Приоритет: P0
+### B. Capability-Aware Runtime Orchestrator
+At startup and before heavy tasks:
+1. Probe hardware.
+2. Score machine tier.
+3. Resolve recommended backend + model.
+4. Apply user override if set.
+5. Fallback safely if chosen path fails.
 
-- Story 1: Multi-mode Hotkeys. Реализовать глобальный хоткей с поддержкой двух нажатий (Toggle) и удержания (Push-to-Talk). — _MEDIUM_
-- Story 2: Audio Visualization Overlay. Создать оверлей, который отображает реальную амплитуду микрофона в виде волны. — _LOW_
-- Story 3: Flexible Injection. Добавить настройки поведения после транскрипции (вставить, скопировать, Enter, Space). — _MEDIUM_
+Scoring baseline:
+- adopt weighted multi-axis scoring inspired by llmfit (quality/speed/fit/context),
+- keep Dictator-specific constraints for speech-to-text latency and transcription quality targets.
 
-Технические риски: Win32 API может конфликтовать с некоторыми играми или приложениями с античитом (инъекция ввода). Открытые вопросы к автору: Хотели бы вы разделить хоткей на "Запись" и "Следующая команда"? Зависимости: Модуль захвата аудио должен быть готов.
+### C. Shared Storage Contract
+Define stable cross-app locations and metadata:
+- shared model directory,
+- shared installed-model index file,
+- optional shared dictionary file (later),
+- optional shared presets (later).
 
-### Epic 2: AI Engine & Resource Management
+Contract must support:
+- app A installs model -> app B sees it without rescan issues,
+- partial/corrupt downloads -> clear health state,
+- versioned metadata migrations.
 
-Цель: Обеспечить стабильную работу локальных моделей без перерасхода ресурсов видеокарты/оперативки. Приоритет: P0/P1
+## 6) Platform Runtime Matrix (Target)
 
-- Story 1: Model Selector GUI. Добавить вкладку настроек с выбором модели Whisper и LLM, сортировкой по размеру/скорости. — _MEDIUM_
-- Story 2: Memory Unload Mechanism. Реализовать таймер "sleep", который удаляет модель из памяти через N минут простоя. — _HIGH_
-- Story 3: Post-Processing Toggle. Добавить флэг конфигурации для включения/выключения LLM-коррекции. — _LOW_
+### Tier H (High-end, e.g. strong NVIDIA GPU)
+- Preferred: GPU-accelerated backend + larger/faster-accurate models.
+- Goal: real-time or near-real-time transcription.
 
-Технические риски: Задержка при повторной загрузке модели (User wait time) при сработавшем таймере сна. Открытые вопросы к автору: Какую дефолтную задержку сделать для сброса памяти (1 мин, 5 мин, 10 мин)? Зависимости: Интеграция с `faster-whisper` и `Ollama`.
+### Tier M (Mid-range CPU/GPU)
+- Preferred: efficient local models on CPU or mixed path.
+- Goal: stable latency with acceptable quality.
 
-### Epic 3: User Data & Persistence
+### Tier L (Low-end machines)
+- Preferred: smallest local models + conservative defaults.
+- Goal: always functional local mode, lower quality tolerated.
+- Future: optional cloud acceleration path (off by default).
 
-Цель: Дать пользователю контроль над историей и настройками. Приоритет: P1/P2
+## 7) Phased Plan
 
-- Story 1: History View. Отображение списка последних транскрипций с кнопками "Copy Text", "Open Audio File", "Delete". — _MEDIUM_
-- Story 2: Custom Dictionary Editor. Интерфейс для добавления слов в `vocabulary` файл без ручного редактирования TOML. — _HIGH_
-- Story 3: Settings & About. Добавить раздел "About" с кнопкой открытия папки с логом/файлами и ссылки на GitHub. — _LOW_
+### Phase 1 — Shared Runtime Foundation (Now, P0)
+- Shared module boundaries and contracts.
+- Common model storage/index.
+- Canonical model catalog draft.
+- Hardware profiling MVP integrated in Dictator.
 
-Технические риски: Сохранение аудиофайлов может быстро занять место на диске. Нужна автоочистка (как в Handy - 5 последних). Открытые вопросы к автору: Где хранить историю? В папке с приложением или в AppData/Local?
+### Phase 2 — Adaptive Runtime & UX Integration (P0/P1)
+- Runtime policy engine + fallback chain.
+- Settings window expansion for hardware/runtime/model controls.
+- Same shared modules integrated into Contora.
 
----
+### Phase 3 — Robustness and Data Sharing (P1)
+- Telemetry/logging for backend choice and failures (local logs).
+- Shared dictionary contract (if approved).
+- Shared/portable user presets (optional).
 
-## ШАГ 4: Антипаттерны
+### Phase 4 — Cloud & Mobile Readiness (P2)
+- Optional cloud transcription provider abstraction.
+- Sync strategy design for multi-device scenarios.
+- Reuse shared contracts for iOS/Android native clients.
 
-Чего мы делаем НЕ БУДЕМ:
+## 8) Decisions Locked For Current Cycle
 
-|Антипаттерн|Почему автор против|Урок для Dictator|
-|---|---|---|
-|Визуальный мусор на рабочем столе|Monologue и Wispr Flow (Flow Bar) постоянно засоряют экран даже когда не используются.|Делать оверлей только во время записи/транскрипции. В остальное время — только Tray Icon. Никаких "Monophone" виджетов.|
-|Внедрение подписок для локальных функций|Monologue ограничивает слова даже при использовании локальной модели (офлайн).|Локальный режим должен быть полностью бесплатным и безлимитным (кроме ограничений ресурсов ПК пользователя).|
-|Избыточные системные права|Monologue требует доступ к экрану "для контекста" без четкого объяснения.|Запрашивать только Microphone и Accessibility (для ввода текста). Если нужна скриншот-функция — делать опционально с предупреждением.|
-|Скрытая облачная обработка|Wispr Flow использует облако по умолчанию, автор хочет прозрачности.|Четкое визуальное разделение: "Local Whisper" vs "Cloud API". По умолчанию только Local. Никакой скрытой синхронизации.|
-|Агрессивный маркетинг внутри UI|Monologue баннеры с продажей других продуктов.|UI Dictator должен быть чистым, инструментом, а не витриной. Ссылка на GitHub и Donation может быть в "About".|
+- Priority is **not** dictionary editor first.
+- Priority is shared infra + hardware-aware reliability.
+- Dictator and Contora must converge on one model ecosystem.
+- Cloud is planned, but local compute remains first-class default.
 
----
+## 9) Success Metrics
 
-## ШАГ 5: Карта неопределённостей
+- Cold start to "ready to transcribe" within target by hardware tier.
+- First transcription success rate across supported hardware tiers.
+- Zero duplicate downloads for same model across Dictator/Contora on one machine.
+- Deterministic runtime selection logs for troubleshooting.
+- Settings discoverability: users can configure model/runtime without editing config files.
 
-Требует решения автора:
+## 10) Risks and Mitigations
 
-1. Архитектура macOS/Linux:
-    - _Контекст:_ Сейчас мы делаем нативный Rust + Win32 API. Для macOS потребуется переписывание части UI (на Swift/SwiftUI) и ввода текста (Accessibility API vs SendInput).
-    - _Варианты:_ A) Пишем общую логику на Rust, разные обертки для GUI/UI (Tauri? Native?), B) Разделяем кодобазу полностью.
-2. Скорость загрузок LLM:
-    - _Контекст:_ При сбросе памяти модель уходит из VRAM. Если автор включит "Smart Unload", то следующая запись будет ждать инициализации (3-10 сек на RTX 3090).
-    - _Варианты:_ A) Отключить сброс по умолчанию для быстрой загрузки, B) Реализовать прелоадер (прогресс-бар в трее), C) Разделить модели для быстрого старта и качественной работы.
-3. Scope "Command Mode":
-    - _Контекст:_ Wispr Flow позволяет редактировать выделенный текст голосом/LLM. Это сложно реализовать глобально (инъекция в чужие приложения).
-    - _Варианты:_ A) Сделать локальный буфер, куда копируется выделенное, обрабатывается, возвращается, B) Забыть на P3, C) Сделать просто окно с историей для редактирования.
+- Risk: hardware detection inconsistency across OS.
+  - Mitigation: capability abstraction + per-OS adapters + confidence flags.
+- Risk: model metadata drift between apps.
+  - Mitigation: single shared catalog and schema versioning.
+- Risk: fallback complexity causes brittle UX.
+  - Mitigation: explicit fallback chain and user-visible status.
+- Risk: over-expanding scope too early (cloud/mobile).
+  - Mitigation: keep them architecture-ready, not delivery-critical for current cycle.
 
----
 
-## ШАГ 6: Предложение по фазам
 
-### Фаза 1: MVP+ (Замена текущего v0.1.0-alpha)
+## 11) Model Expansion Track (New Priority)
 
-Фокус: Все P0 функции. Пользователь получает работающий инструмент лучше, чем простой `sendinput`.
+Goal: expand the supported STT model set beyond current Whisper-centric defaults to improve
+accuracy/speed coverage by hardware tier and user profile.
 
-- Epic 1 (Input): Умные хоткеи (PTT + Toggle), Оверлей с волной, Методы вставки.
-- Epic 2 (AI): Базовый выбор модели через меню (не конфиг).
-- Ожидаемый результат: Пользователь может запускать запись голосом или кнопкой, видеть волну, текст падает куда надо без перезагрузки буфера обмена.
-- Риски: Уровни шума могут некорректно отображаться в оверлее.
+Input signal (community benchmark note, to validate in our pipeline):
+- ElevenLabs Scribe v2 (cloud): very high benchmark accuracy claim.
+- NVIDIA Canary Qwen 2.5B (local): high-accuracy local candidate, requires strong GPU (about 8GB VRAM class).
+- IBM Granite Speech 3.3 8B (local): high-accuracy/noise-resilience candidate, heavy runtime profile.
+- Parakeet TDT 0.6B V2 remains speed-oriented baseline.
 
-### Фаза 2: Polish (Повседневное использование)
+Benchmark references to include in evaluation docs:
+- https://artificialanalysis.ai/speech-to-text
+- https://huggingface.co/spaces/hf-audio/open_asr_leaderboard
 
-Фокус: Комфорт и настройки (P1 функции).
+Acceptance policy for adding new model families:
+1. Reproducible internal validation on Dictator test set (accuracy + latency + robustness).
+2. Hardware-fit mapping (High/Mid/Low tiers) with explicit VRAM/RAM thresholds.
+3. Runtime/backend feasibility for Windows-first delivery.
+4. Licensing/commercial usage check.
+5. UX readiness in Settings (clear trade-offs and recommended hardware).
 
-- Epic 3 (Data): История транскрипций, настройка автоочистки.
-- Epic 2 (AI - Advanced): Автосброс памяти (Memory Management), Post-processing toggle.
-- Ожидаемый результат: Приложение становится "незаметным", не съедает VRAM в простое, есть куда посмотреть старый текст.
-- Риски: Сложность с реализацией таймера сна для GPU моделей в Rust без блокировки интерфейса.
-
-### Фаза 3: Advanced (Power User)
-
-Фокус: Продвинутая настройка и AI-фичи (P2/P3).
-
-- Epic 4 (Dict): Редактор словаря.
-- Epic 5 (Command): Experiment с командным режимом (через буфер или отдельное окно).
-- Ожидаемый результат: Полный кастомизационный контроль, паритет с платными облачными решениями по функционалу при сохранении приватности.
-
-Рекомендация: Начать работу сразу над Фаза 1, но параллельно подготовить структуру для Epic 3 (Data), так как без истории продукт кажется нестабильным ("куда делся текст?").
+Near-term target outcomes:
+- Add at least one new high-accuracy local family beyond Whisper.
+- Define optional cloud accuracy tier (off by default, explicit opt-in).
+- Ship an updated unified model catalog with per-model capability requirements and recommendation rules.

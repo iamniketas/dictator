@@ -409,7 +409,8 @@ impl ApplicationHandler<OverlayCommand> for OverlayApp {
                 let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), a, LWA_ALPHA);
                 drop(state);
 
-                // Set position but DO NOT show
+                // Keep hidden on startup to avoid any first-frame flicker.
+                let _ = ShowWindow(hwnd, SW_HIDE);
                 let _ = SetWindowPos(
                     hwnd,
                     HWND_TOPMOST,
@@ -417,7 +418,7 @@ impl ApplicationHandler<OverlayCommand> for OverlayApp {
                     0,
                     0,
                     0,
-                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_HIDEWINDOW,
                 );
 
                 // Set rounded corners (12px radius)
@@ -842,3 +843,9 @@ impl Drop for OverlayWindow {
         }
     }
 }
+
+
+
+
+
+

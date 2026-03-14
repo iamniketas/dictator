@@ -7,7 +7,6 @@ edition = "2024"
 # Enable GPU acceleration via CUDA (requires CUDA Toolkit installed)
 # Build with: cargo build --features cuda
 cuda = ["whisper-rs/cuda"]
-
 [dependencies]
 # Embedded Whisper inference (whisper.cpp bindings, no Python required)
 # Models: download GGML .bin from https://huggingface.co/ggerganov/whisper.cpp
@@ -71,6 +70,11 @@ winit = "0.30"
 softbuffer = "0.4"
 swash = "0.1"
 
+# Shared hardware profiling module (cross-project runtime capability detection)
+hardware-profiler = { path = "../../shared/runtime/hardware-profiler" }
+# Shared model catalog/store module (cross-project model visibility)
+model-store = { path = "../../shared/runtime/model-store" }
+
 [build-dependencies]
 embed-resource = "2.4"
 
@@ -91,3 +95,9 @@ opt-level = 3
 lto = true
 codegen-units = 1
 strip = true
+
+[patch.crates-io]
+cmake = { path = "vendor/cmake" }
+whisper-rs-sys = { path = "vendor/whisper-rs-sys" }
+
+

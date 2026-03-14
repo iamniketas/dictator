@@ -51,3 +51,10 @@ orchestrator*.log
 open.url
 *.ico.bak
 screen*.jpg
+
+# Local SDK / tool caches
+.dotnet-home/
+
+# WinUI settings-host build outputs
+apps/windows/settings-host/**/bin/
+apps/windows/settings-host/**/obj/

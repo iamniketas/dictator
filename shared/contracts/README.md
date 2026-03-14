@@ -1,4 +1,4 @@
-# Shared Contracts
+﻿# Shared Contracts
 
 Stable agreements between platform clients and related projects (Dictator, Contora).
 
@@ -37,7 +37,18 @@ Cross-platform shape for core settings:
 | `injection` | method (direct/clipboard/auto) | Platform-dependent default |
 | `history` | max_entries, store_audio | Default: 50, false |
 
-### 3. Whisper Server API (`whisper_api.md`)
+### 3. Runtime Contracts (`runtime/*.json`)
+
+Shared contracts for hardware-aware runtime selection and model reuse between apps:
+
+| File | Purpose |
+|------|---------|
+| `runtime/hardware_profile.v1.json` | Normalized CPU/GPU/RAM/OS capability snapshot with tier and confidence |
+| `runtime/runtime_policy.v1.json` | Runtime decision + fallback chain (`backend`, `device`, `model_id`) |
+| `runtime/model_catalog.v1.json` | Canonical supported model metadata and requirements |
+| `runtime/shared_model_store.v1.json` | Shared installed runtime/model registry + health state |
+
+### 4. Whisper Server API (`whisper_api.md`)
 
 HTTP interface shared between Dictator and Contora:
 
@@ -50,7 +61,7 @@ Content-Type: multipart/form-data
 Response: {"text": "...", "segments": [...], "language": "ru"}
 ```
 
-### 4. History Format (`history.schema.json`)
+### 5. History Format (`history.schema.json`)
 
 ```json
 {
@@ -65,13 +76,13 @@ Response: {"text": "...", "segments": [...], "language": "ru"}
 }
 ```
 
-### 5. Shared Resources (local machine)
+### 6. Shared Resources (local machine)
 
 Multiple apps on the same machine can share:
 
 | Resource | Default Location (Windows) | Default Location (macOS) |
 |----------|---------------------------|--------------------------|
-| Whisper models | `%LocalAppData%\whisper-models\` | `~/Library/Application Support/whisper-models/` |
+| Whisper models | `%LocalAppData%\AudioModels\` | `~/Library/Application Support/AudioModels/` |
 | Whisper server | `shared/whisper-server/` | (or WhisperKit embedded) |
 | Ollama | `http://localhost:11434` | Same |
 | Custom dictionary | `%AppData%\dictator\dictionary.json` | `~/Library/Application Support/dictator/` |
@@ -87,3 +98,5 @@ Multiple apps on the same machine can share:
 2. Each platform maps its local models to this schema.
 3. On load/save, each client validates against the schema.
 4. If schema changes, we bump version and update all clients intentionally.
+
+

@@ -1,0 +1,11 @@
+Graphics/Displays:
+
+    Apple M3 Max:
+
+      Chipset Model: Apple M3 Max
+      Type: GPU
+
+    Radeon Pro 5600M:
+
+      Chipset Model: AMD Radeon Pro 5600M
+      Type: GPU

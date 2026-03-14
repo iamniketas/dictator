@@ -1,0 +1,10 @@
+  *-display
+       description: VGA compatible controller
+       product: GA102 [GeForce RTX 3090]
+       vendor: NVIDIA Corporation
+       size: 24GiB
+  *-display
+       description: VGA compatible controller
+       product: Navi 22 [Radeon RX 6700 XT]
+       vendor: Advanced Micro Devices, Inc. [AMD/ATI]
+       size: 12288MiB

@@ -308,7 +308,7 @@ pub fn build_history_menu_entries(recordings: &[Recording], start_id: u16) -> Ve
         .iter()
         .enumerate()
         .map(|(i, rec)| {
-            let time = &rec.metadata.datetime[11..16]; // HH:MM
+            let time = rec.metadata.datetime.get(11..16).unwrap_or("--:--"); // HH:MM
             let preview = if rec.metadata.text_preview.len() > 30 {
                 format!("{}...", &rec.metadata.text_preview[..30])
             } else {

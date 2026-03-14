@@ -2,21 +2,23 @@
 
 use anyhow::Result;
 use std::path::PathBuf;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use windows::core::w;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::Graphics::Gdi::HBRUSH;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Shell::{
-    Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW,
+    Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_SETVERSION,
+    NOTIFYICON_VERSION_4, NOTIFYICONDATAW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DispatchMessageW,
-    GetCursorPos, GetMessageW, LoadIconW, LoadImageW, MessageBoxW, PostQuitMessage, RegisterClassW,
-    SetForegroundWindow, TrackPopupMenu, CS_HREDRAW, CS_VREDRAW, IDI_APPLICATION, IMAGE_ICON,
-    LR_LOADFROMFILE, MB_ICONINFORMATION, MB_OK, MF_CHECKED, MF_GRAYED, MF_SEPARATOR, MF_STRING,
-    MF_UNCHECKED, MSG, TPM_BOTTOMALIGN, TPM_LEFTALIGN, WM_COMMAND, WM_DESTROY, WM_RBUTTONUP,
-    WM_USER, WNDCLASSW, WS_OVERLAPPEDWINDOW,
+    AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DispatchMessageW,
+    GetCursorPos, GetMessageW, LoadIconW, LoadImageW, MessageBoxW, PostMessageW, PostQuitMessage,
+    RegisterClassW, SetForegroundWindow, TrackPopupMenu, CS_HREDRAW, CS_VREDRAW, IDI_APPLICATION,
+    IMAGE_ICON, LR_LOADFROMFILE, MB_ICONINFORMATION, MB_OK, MF_CHECKED, MF_GRAYED, MF_SEPARATOR,
+    MF_STRING, MF_UNCHECKED, MSG, TPM_BOTTOMALIGN, TPM_LEFTALIGN, WM_COMMAND, WM_CONTEXTMENU, WM_DESTROY, WM_NULL,
+    WM_RBUTTONDOWN, WM_RBUTTONUP, WM_USER, WNDCLASSW, WS_OVERLAPPEDWINDOW,
 };
 
 const WM_TRAYICON: u32 = WM_USER + 1;
@@ -162,7 +164,7 @@ where
     }
 }
 
-/// Set the callback invoked when user selects a model to download (receives 0-based KNOWN_MODELS index)
+/// Set the callback invoked when user selects a model to download (receives 0-based catalog index)
 pub fn set_download_model_callback<F>(callback: F)
 where
     F: Fn(usize) + Send + 'static,
@@ -305,6 +307,9 @@ pub fn run_tray() -> Result<()> {
         if !Shell_NotifyIconW(NIM_ADD, &nid).as_bool() {
             return Err(anyhow::anyhow!("Failed to add tray icon"));
         }
+        let mut version_nid = nid;
+        version_nid.Anonymous.uVersion = NOTIFYICON_VERSION_4;
+        let _ = Shell_NotifyIconW(NIM_SETVERSION, &version_nid);
 
         let mut msg = MSG::default();
         while GetMessageW(&mut msg, None, 0, 0).into() {
@@ -366,106 +371,115 @@ unsafe extern "system" fn window_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
-    unsafe {
-        match msg {
-            WM_TRAYICON => {
-                if lparam.0 as u32 == WM_RBUTTONUP {
-                    show_context_menu(hwnd);
-                }
-                LRESULT(0)
-            }
-            WM_COMMAND => {
-                let cmd = (wparam.0 & 0xFFFF) as u16;
-                if cmd == ID_EXIT {
-                    SHOULD_EXIT.store(true, Ordering::SeqCst);
-                    PostQuitMessage(0);
-                } else if cmd == ID_STREAMING {
-                    let new_state = !STREAMING_ENABLED.load(Ordering::SeqCst);
-                    STREAMING_ENABLED.store(new_state, Ordering::SeqCst);
-                    eprintln!("[TRAY] Streaming {}", if new_state { "enabled" } else { "disabled" });
-                } else if cmd == ID_CHUNK_3 {
-                    set_streaming_chunk_seconds(3);
-                    eprintln!("[TRAY] Streaming chunk set to 3s");
-                } else if cmd == ID_CHUNK_8 {
-                    set_streaming_chunk_seconds(8);
-                    eprintln!("[TRAY] Streaming chunk set to 8s");
-                } else if cmd == ID_CHUNK_15 {
-                    set_streaming_chunk_seconds(15);
-                    eprintln!("[TRAY] Streaming chunk set to 15s");
-                } else if cmd == ID_OPEN_HISTORY {
-                    eprintln!("[TRAY] Opening history folder");
-                    if let Ok(cb) = HISTORY_OPEN_CALLBACK.lock() {
-                        if let Some(ref callback) = *cb {
-                            callback();
-                        }
-                    }
-                } else if cmd >= ID_HISTORY_START && cmd <= ID_HISTORY_END {
-                    let index = (cmd - ID_HISTORY_START) as usize;
-                    eprintln!("[TRAY] Copying history entry {}", index);
-                    if let Ok(cb) = HISTORY_COPY_CALLBACK.lock() {
-                        if let Some(ref callback) = *cb {
-                            callback(index);
-                        }
-                    }
-                } else if cmd >= ID_MODEL_START && cmd <= ID_MODEL_END {
-                    let index = (cmd - ID_MODEL_START) as usize;
-                    eprintln!("[TRAY] Selecting model {}", index);
-                    if let Ok(cb) = MODEL_SELECT_CALLBACK.lock() {
-                        if let Some(ref callback) = *cb {
-                            callback(index);
-                        }
-                    }
-                } else if cmd == ID_OLLAMA {
-                    let new_state = !OLLAMA_ENABLED.load(Ordering::SeqCst);
-                    OLLAMA_ENABLED.store(new_state, Ordering::SeqCst);
-                    eprintln!("[TRAY] Ollama LLM correction {}", if new_state { "enabled" } else { "disabled" });
-                } else if cmd == ID_OPEN_CONFIG {
-                    eprintln!("[TRAY] Opening config file");
-                    if let Ok(cb) = OPEN_CONFIG_CALLBACK.lock() {
-                        if let Some(ref callback) = *cb {
-                            callback();
-                        }
-                    }
-                } else if cmd == ID_INSTALL_UPDATE {
-                    eprintln!("[TRAY] Install update clicked");
-                    if let Ok(cb) = INSTALL_UPDATE_CALLBACK.lock() {
-                        if let Some(ref callback) = *cb {
-                            callback();
-                        }
-                    }
-                } else if cmd == ID_SETTINGS {
-                    eprintln!("[TRAY] Opening settings");
-                    if let Ok(cb) = SETTINGS_CALLBACK.lock() {
-                        if let Some(ref callback) = *cb {
-                            callback();
-                        }
-                    }
-                } else if cmd >= ID_DOWNLOAD_START && cmd <= ID_DOWNLOAD_END {
-                    let index = (cmd - ID_DOWNLOAD_START) as usize;
-                    if !IS_DOWNLOADING.load(Ordering::SeqCst) {
-                        eprintln!("[TRAY] Download model index {}", index);
-                        if let Ok(cb) = DOWNLOAD_MODEL_CALLBACK.lock() {
-                            if let Some(ref callback) = *cb {
-                                callback(index);
-                            }
-                        }
-                    }
-                } else if cmd == ID_ABOUT {
-                    let _ = MessageBoxW(
-                        hwnd,
-                        w!("Dictator v0.1.0-alpha\r\nVoice dictation for Windows\r\n\r\nHotkey: Right Ctrl\r\n  Hold >300ms \u{2192} Push-to-Talk\r\n  Tap          \u{2192} Toggle mode\r\n\r\nRuns 100% locally. No cloud, no telemetry.\r\n\r\nhttps://github.com/iamniketas/dictator"),
-                        w!("About Dictator"),
-                        MB_OK | MB_ICONINFORMATION,
-                    );
-                }
-                LRESULT(0)
-            }
-            WM_DESTROY => {
-                PostQuitMessage(0);
-                LRESULT(0)
-            }
-            _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+    match catch_unwind(AssertUnwindSafe(|| unsafe { window_proc_impl(hwnd, msg, wparam, lparam) })) {
+        Ok(result) => result,
+        Err(_) => {
+            eprintln!("[TRAY] panic in window_proc; ignoring message");
+            LRESULT(0)
         }
+    }
+}
+
+unsafe fn window_proc_impl(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    match msg {
+        WM_TRAYICON => {
+            let tray_event = (lparam.0 as u32) & 0xFFFF;
+            if tray_event == WM_RBUTTONUP || tray_event == WM_RBUTTONDOWN || tray_event == WM_CONTEXTMENU {
+                show_context_menu(hwnd);
+            }
+            LRESULT(0)
+        }
+        WM_COMMAND => {
+            let cmd = (wparam.0 & 0xFFFF) as u16;
+            if cmd == ID_EXIT {
+                SHOULD_EXIT.store(true, Ordering::SeqCst);
+                PostQuitMessage(0);
+            } else if cmd == ID_STREAMING {
+                let new_state = !STREAMING_ENABLED.load(Ordering::SeqCst);
+                STREAMING_ENABLED.store(new_state, Ordering::SeqCst);
+                eprintln!("[TRAY] Streaming {}", if new_state { "enabled" } else { "disabled" });
+            } else if cmd == ID_CHUNK_3 {
+                set_streaming_chunk_seconds(3);
+                eprintln!("[TRAY] Streaming chunk set to 3s");
+            } else if cmd == ID_CHUNK_8 {
+                set_streaming_chunk_seconds(8);
+                eprintln!("[TRAY] Streaming chunk set to 8s");
+            } else if cmd == ID_CHUNK_15 {
+                set_streaming_chunk_seconds(15);
+                eprintln!("[TRAY] Streaming chunk set to 15s");
+            } else if cmd == ID_OPEN_HISTORY {
+                eprintln!("[TRAY] Opening history folder");
+                if let Ok(cb) = HISTORY_OPEN_CALLBACK.lock() {
+                    if let Some(ref callback) = *cb {
+                        callback();
+                    }
+                }
+            } else if cmd >= ID_HISTORY_START && cmd <= ID_HISTORY_END {
+                let index = (cmd - ID_HISTORY_START) as usize;
+                eprintln!("[TRAY] Copying history entry {}", index);
+                if let Ok(cb) = HISTORY_COPY_CALLBACK.lock() {
+                    if let Some(ref callback) = *cb {
+                        callback(index);
+                    }
+                }
+            } else if cmd >= ID_MODEL_START && cmd <= ID_MODEL_END {
+                let index = (cmd - ID_MODEL_START) as usize;
+                eprintln!("[TRAY] Selecting model {}", index);
+                if let Ok(cb) = MODEL_SELECT_CALLBACK.lock() {
+                    if let Some(ref callback) = *cb {
+                        callback(index);
+                    }
+                }
+            } else if cmd == ID_OLLAMA {
+                let new_state = !OLLAMA_ENABLED.load(Ordering::SeqCst);
+                OLLAMA_ENABLED.store(new_state, Ordering::SeqCst);
+                eprintln!("[TRAY] Ollama LLM correction {}", if new_state { "enabled" } else { "disabled" });
+            } else if cmd == ID_OPEN_CONFIG {
+                eprintln!("[TRAY] Opening config file");
+                if let Ok(cb) = OPEN_CONFIG_CALLBACK.lock() {
+                    if let Some(ref callback) = *cb {
+                        callback();
+                    }
+                }
+            } else if cmd == ID_INSTALL_UPDATE {
+                eprintln!("[TRAY] Install update clicked");
+                if let Ok(cb) = INSTALL_UPDATE_CALLBACK.lock() {
+                    if let Some(ref callback) = *cb {
+                        callback();
+                    }
+                }
+            } else if cmd == ID_SETTINGS {
+                eprintln!("[TRAY] Opening settings");
+                if let Ok(cb) = SETTINGS_CALLBACK.lock() {
+                    if let Some(ref callback) = *cb {
+                        callback();
+                    }
+                }
+            } else if cmd >= ID_DOWNLOAD_START && cmd <= ID_DOWNLOAD_END {
+                let index = (cmd - ID_DOWNLOAD_START) as usize;
+                if !IS_DOWNLOADING.load(Ordering::SeqCst) {
+                    eprintln!("[TRAY] Download model index {}", index);
+                    if let Ok(cb) = DOWNLOAD_MODEL_CALLBACK.lock() {
+                        if let Some(ref callback) = *cb {
+                            callback(index);
+                        }
+                    }
+                }
+            } else if cmd == ID_ABOUT {
+                let _ = MessageBoxW(
+                    hwnd,
+                    w!("Dictator v0.1.0-alpha\r\nVoice dictation for Windows\r\n\r\nHotkey: Right Ctrl\r\n  Hold >300ms \u{2192} Push-to-Talk\r\n  Tap          \u{2192} Toggle mode\r\n\r\nRuns 100% locally. No cloud, no telemetry.\r\n\r\nhttps://github.com/iamniketas/dictator"),
+                    w!("About Dictator"),
+                    MB_OK | MB_ICONINFORMATION,
+                );
+            }
+            LRESULT(0)
+        }
+        WM_DESTROY => {
+            PostQuitMessage(0);
+            LRESULT(0)
+        }
+        _ => DefWindowProcW(hwnd, msg, wparam, lparam),
     }
 }
 
@@ -554,5 +568,21 @@ unsafe fn show_context_menu(hwnd: HWND) {
         let _ = GetCursorPos(&mut pt);
         let _ = SetForegroundWindow(hwnd);
         let _ = TrackPopupMenu(menu, TPM_LEFTALIGN | TPM_BOTTOMALIGN, pt.x, pt.y, 0, hwnd, None);
+        let _ = PostMessageW(hwnd, WM_NULL, WPARAM(0), LPARAM(0));
+        let _ = DestroyMenu(menu);
     }
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
