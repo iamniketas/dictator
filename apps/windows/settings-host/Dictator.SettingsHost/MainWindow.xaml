@@ -19,6 +19,7 @@
                 <NavigationViewItem Content="Models" Tag="models"><NavigationViewItem.Icon><FontIcon Glyph="&#xE8F1;" /></NavigationViewItem.Icon></NavigationViewItem>
                 <NavigationViewItem Content="Runtime &amp; Device" Tag="runtime"><NavigationViewItem.Icon><FontIcon Glyph="&#xE9D9;" /></NavigationViewItem.Icon></NavigationViewItem>
                 <NavigationViewItem Content="Dictation" Tag="dictation"><NavigationViewItem.Icon><FontIcon Glyph="&#xE720;" /></NavigationViewItem.Icon></NavigationViewItem>
+                <NavigationViewItem Content="History" Tag="history"><NavigationViewItem.Icon><FontIcon Glyph="&#xE81C;" /></NavigationViewItem.Icon></NavigationViewItem>
                 <NavigationViewItem Content="Storage" Tag="storage"><NavigationViewItem.Icon><FontIcon Glyph="&#xE8B7;" /></NavigationViewItem.Icon></NavigationViewItem>
                 <NavigationViewItem Content="About" Tag="about"><NavigationViewItem.Icon><FontIcon Glyph="&#xE946;" /></NavigationViewItem.Icon></NavigationViewItem>
             </NavigationView.MenuItems>
@@ -237,6 +238,89 @@
                                 <ToggleSwitch x:Name="PostOverlayToggle" Header="Show post-transcription summary overlay" Toggled="OnPostOverlayToggled" />
                                 <NumberBox x:Name="PostOverlaySecondsBox" Header="Summary overlay duration (seconds)" Minimum="1" Maximum="15" ValueChanged="OnPostOverlaySecondsChanged" />
                                 <TextBlock x:Name="OverlayHintText" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
+                            </StackPanel>
+                        </Border>
+
+                        <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="12" Padding="16">
+                            <StackPanel Spacing="12">
+                                <TextBlock Text="Corrections Dictionary" FontSize="16" FontWeight="SemiBold" />
+                                <TextBlock Text="Deterministic replacements applied after transcription. Entries can be manual or auto-learned." Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
+                                <ToggleSwitch x:Name="CorrectionsToggle" Header="Enable corrections dictionary" Toggled="OnCorrectionsToggled" />
+                                <ToggleSwitch x:Name="CorrectionsAutoLearnToggle" Header="Auto-learn repeated corrections" Toggled="OnCorrectionsAutoLearnToggled" />
+                                <NumberBox x:Name="CorrectionsMinRepeatsBox" Header="Auto-learn minimum repeats" Minimum="2" Maximum="20" ValueChanged="OnCorrectionsMinRepeatsChanged" />
+
+                                <Grid ColumnSpacing="8">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBox x:Name="CorrectionFromBox" Header="Replace from" />
+                                    <TextBox x:Name="CorrectionToBox" Header="Replace to" Grid.Column="1" />
+                                    <Button Content="Add" Grid.Column="2" VerticalAlignment="Bottom" Click="OnAddCorrectionClick" />
+                                </Grid>
+
+                                <ListView x:Name="CorrectionsList" Height="190" SelectionMode="Single">
+                                    <ListView.ItemTemplate>
+                                        <DataTemplate>
+                                            <Grid ColumnSpacing="10">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Text="{Binding Label}" TextWrapping="Wrap" />
+                                                <Button Grid.Column="1" Content="Delete" Tag="{Binding From}" Click="OnDeleteCorrectionClick" />
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ListView.ItemTemplate>
+                                </ListView>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+
+                    <StackPanel x:Name="HistoryPanel" Spacing="14" Visibility="Collapsed">
+                        <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="12" Padding="16">
+                            <StackPanel Spacing="12">
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <Button Content="Refresh" Click="OnHistoryRefreshClick" />
+                                    <Button Content="Open Audio Folder" Click="OnOpenAudioFolder" />
+                                    <Button Content="Open Transcripts Folder" Click="OnOpenTranscriptsFolder" />
+                                </StackPanel>
+
+                                <Grid ColumnSpacing="12">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="2*" />
+                                        <ColumnDefinition Width="3*" />
+                                    </Grid.ColumnDefinitions>
+
+                                    <ListView x:Name="HistoryList"
+                                              Grid.Column="0"
+                                              SelectionChanged="OnHistorySelectionChanged"
+                                              MinHeight="360">
+                                        <ListView.ItemTemplate>
+                                            <DataTemplate>
+                                                <StackPanel Spacing="2">
+                                                    <TextBlock Text="{Binding Title}" FontWeight="SemiBold" />
+                                                    <TextBlock Text="{Binding Preview}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
+                                                </StackPanel>
+                                            </DataTemplate>
+                                        </ListView.ItemTemplate>
+                                    </ListView>
+
+                                    <Border Grid.Column="1" Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="10" Padding="12">
+                                        <StackPanel Spacing="10">
+                                            <TextBlock x:Name="HistoryDetailTitle" Text="Select a history item" FontWeight="SemiBold" />
+                                            <TextBlock x:Name="HistoryDetailMeta" TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                            <TextBox x:Name="HistoryDetailText" AcceptsReturn="True" Height="220" TextWrapping="Wrap" IsReadOnly="True" />
+                                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                                <Button Content="Copy Text" Click="OnHistoryCopyClick" />
+                                                <Button Content="Open Audio" Click="OnHistoryOpenAudioClick" />
+                                                <Button Content="Open Transcript" Click="OnHistoryOpenTranscriptClick" />
+                                                <Button Content="Delete Entry" Click="OnHistoryDeleteClick" />
+                                            </StackPanel>
+                                        </StackPanel>
+                                    </Border>
+                                </Grid>
                             </StackPanel>
                         </Border>
                     </StackPanel>

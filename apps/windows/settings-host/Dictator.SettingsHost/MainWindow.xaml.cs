@@ -1,5 +1,5 @@
-using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.Globalization;
 using System.Linq;
@@ -32,6 +32,8 @@ public sealed partial class MainWindow : Window
     private readonly bool _startInOnboarding;
 
     private readonly ObservableCollection<CatalogModelItem> _catalogModels = new();
+    private readonly ObservableCollection<HistoryEntryItem> _historyEntries = new();
+    private readonly ObservableCollection<CorrectionEntryItem> _correctionEntries = new();
     private readonly List<CatalogModelItem> _catalogSource = CatalogModelItem.DefaultCatalog();
     private readonly Dictionary<string, CancellationTokenSource> _downloadJobs = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _sizeProbeQueued = new(StringComparer.OrdinalIgnoreCase);
@@ -41,6 +43,7 @@ public sealed partial class MainWindow : Window
     private bool _uiReady;
     private bool _closeHintShown;
     private bool _allowClose;
+    private HistoryEntryItem? _selectedHistory;
 
     public MainWindow()
     {
@@ -60,6 +63,8 @@ public sealed partial class MainWindow : Window
 
         SelectNavByTag(_startInOnboarding ? "welcome" : "models");
         CatalogItems.ItemsSource = _catalogModels;
+        HistoryList.ItemsSource = _historyEntries;
+        CorrectionsList.ItemsSource = _correctionEntries;
 
         RefreshAll();
         _uiReady = true;
@@ -160,7 +165,10 @@ public sealed partial class MainWindow : Window
         LoadCatalog();
         LoadConfigFields();
         RefreshStorageCards();
+        RefreshHistoryEntries();
         RefreshHardwareDiagnostics();
+        LoadCorrectionsConfigFields();
+        RefreshCorrectionsList();
         RefreshWelcomeSummary();
         RefreshDictationGuidance();
         SyncSharedModelStore();
@@ -446,6 +454,7 @@ public sealed partial class MainWindow : Window
         ModelsPanel.Visibility = tag == "models" ? Visibility.Visible : Visibility.Collapsed;
         RuntimePanel.Visibility = tag == "runtime" ? Visibility.Visible : Visibility.Collapsed;
         DictationPanel.Visibility = tag == "dictation" ? Visibility.Visible : Visibility.Collapsed;
+        HistoryPanel.Visibility = tag == "history" ? Visibility.Visible : Visibility.Collapsed;
         StoragePanel.Visibility = tag == "storage" ? Visibility.Visible : Visibility.Collapsed;
         AboutPanel.Visibility = tag == "about" ? Visibility.Visible : Visibility.Collapsed;
 
@@ -454,6 +463,7 @@ public sealed partial class MainWindow : Window
             "welcome" => "Welcome",
             "runtime" => "Runtime & Device",
             "dictation" => "Dictation",
+            "history" => "History",
             "storage" => "Storage",
             "about" => "About",
             _ => "Models",
@@ -1120,6 +1130,7 @@ public sealed partial class MainWindow : Window
         _audioHistoryDir = selected;
         UpsertTomlValue("storage", "audio_history_dir", QuoteToml(_audioHistoryDir));
         RefreshStorageCards();
+        RefreshHistoryEntries();
     }
 
     private async void OnChangeTranscriptsFolder(object sender, RoutedEventArgs e)
@@ -1130,12 +1141,269 @@ public sealed partial class MainWindow : Window
         _transcriptsDir = selected;
         UpsertTomlValue("storage", "transcripts_dir", QuoteToml(_transcriptsDir));
         RefreshStorageCards();
+        RefreshHistoryEntries();
     }
 
     private void OnOpenModelsFolder(object sender, RoutedEventArgs e) => OpenPath(_modelsDir);
     private void OnOpenAudioFolder(object sender, RoutedEventArgs e) => OpenPath(_audioHistoryDir);
     private void OnOpenTranscriptsFolder(object sender, RoutedEventArgs e) => OpenPath(_transcriptsDir);
     private void OnClose(object sender, RoutedEventArgs e) => Close();
+
+    private void OnHistoryRefreshClick(object sender, RoutedEventArgs e) => RefreshHistoryEntries();
+
+    private void OnHistorySelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        _selectedHistory = HistoryList.SelectedItem as HistoryEntryItem;
+        if (_selectedHistory is null)
+        {
+            HistoryDetailTitle.Text = "Select a history item";
+            HistoryDetailMeta.Text = string.Empty;
+            HistoryDetailText.Text = string.Empty;
+            return;
+        }
+
+        HistoryDetailTitle.Text = _selectedHistory.Title;
+        HistoryDetailMeta.Text = $"Audio: {_selectedHistory.AudioPath}\nTranscript: {_selectedHistory.TextPath}";
+        try
+        {
+            HistoryDetailText.Text = File.Exists(_selectedHistory.TextPath)
+                ? File.ReadAllText(_selectedHistory.TextPath)
+                : "(Transcript file is missing)";
+        }
+        catch (Exception ex)
+        {
+            HistoryDetailText.Text = $"Failed to open transcript: {ex.Message}";
+        }
+    }
+
+    private void OnHistoryCopyClick(object sender, RoutedEventArgs e)
+    {
+        if (_selectedHistory is null || !File.Exists(_selectedHistory.TextPath)) return;
+        try
+        {
+            var text = File.ReadAllText(_selectedHistory.TextPath);
+            var data = new Windows.ApplicationModel.DataTransfer.DataPackage();
+            data.SetText(text);
+            Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(data);
+        }
+        catch { }
+    }
+
+    private void OnHistoryOpenAudioClick(object sender, RoutedEventArgs e)
+    {
+        if (_selectedHistory is null) return;
+        OpenPath(_selectedHistory.AudioPath);
+    }
+
+    private void OnHistoryOpenTranscriptClick(object sender, RoutedEventArgs e)
+    {
+        if (_selectedHistory is null) return;
+        OpenPath(_selectedHistory.TextPath);
+    }
+
+    private void OnHistoryDeleteClick(object sender, RoutedEventArgs e)
+    {
+        if (_selectedHistory is null) return;
+        try
+        {
+            if (File.Exists(_selectedHistory.TextPath)) File.Delete(_selectedHistory.TextPath);
+            if (!string.IsNullOrWhiteSpace(_selectedHistory.MetaPath) && File.Exists(_selectedHistory.MetaPath))
+            {
+                File.Delete(_selectedHistory.MetaPath);
+            }
+            if (File.Exists(_selectedHistory.AudioPath)) File.Delete(_selectedHistory.AudioPath);
+        }
+        catch { }
+
+        _selectedHistory = null;
+        RefreshHistoryEntries();
+    }
+
+    private void RefreshHistoryEntries()
+    {
+        Directory.CreateDirectory(_audioHistoryDir);
+        Directory.CreateDirectory(_transcriptsDir);
+
+        var items = new List<HistoryEntryItem>();
+        foreach (var textPath in Directory.EnumerateFiles(_transcriptsDir, "*.txt", SearchOption.AllDirectories))
+        {
+            var file = new FileInfo(textPath);
+            var id = Path.GetFileNameWithoutExtension(textPath);
+            var day = file.Directory?.Name ?? string.Empty;
+            var audioPath = Path.Combine(_audioHistoryDir, day, id + ".wav");
+            var metaPath = Path.Combine(_transcriptsDir, day, id + ".json");
+
+            string preview;
+            try
+            {
+                var content = File.ReadAllText(textPath).Replace('\n', ' ').Trim();
+                preview = content.Length > 96 ? content[..96] + "..." : content;
+            }
+            catch
+            {
+                preview = "(Failed to read transcript)";
+            }
+
+            var title = $"{file.LastWriteTime:yyyy-MM-dd HH:mm} · {id}";
+            items.Add(new HistoryEntryItem
+            {
+                Id = id,
+                Title = title,
+                Preview = preview,
+                AudioPath = audioPath,
+                TextPath = textPath,
+                MetaPath = metaPath,
+                SortKey = file.LastWriteTimeUtc
+            });
+        }
+
+        _historyEntries.Clear();
+        foreach (var item in items.OrderByDescending(i => i.SortKey).Take(250))
+        {
+            _historyEntries.Add(item);
+        }
+
+        if (_historyEntries.Count == 0)
+        {
+            HistoryDetailTitle.Text = "No history entries yet";
+            HistoryDetailMeta.Text = "Start dictation to populate audio/text history.";
+            HistoryDetailText.Text = string.Empty;
+            return;
+        }
+
+        if (_selectedHistory is not null)
+        {
+            var restored = _historyEntries.FirstOrDefault(x => x.Id == _selectedHistory.Id);
+            if (restored is not null)
+            {
+                HistoryList.SelectedItem = restored;
+            }
+        }
+    }
+
+    private void LoadCorrectionsConfigFields()
+    {
+        CorrectionsToggle.IsOn = GetTomlBool("corrections", "enabled") ?? true;
+        CorrectionsAutoLearnToggle.IsOn = GetTomlBool("corrections", "auto_learn") ?? true;
+        CorrectionsMinRepeatsBox.Value = GetTomlUInt("corrections", "min_auto_learn_repeats") ?? 3;
+    }
+
+    private void OnCorrectionsToggled(object sender, RoutedEventArgs e)
+    {
+        if (!_uiReady) return;
+        UpsertTomlValue("corrections", "enabled", CorrectionsToggle.IsOn ? "true" : "false");
+    }
+
+    private void OnCorrectionsAutoLearnToggled(object sender, RoutedEventArgs e)
+    {
+        if (!_uiReady) return;
+        UpsertTomlValue("corrections", "auto_learn", CorrectionsAutoLearnToggle.IsOn ? "true" : "false");
+    }
+
+    private void OnCorrectionsMinRepeatsChanged(NumberBox sender, NumberBoxValueChangedEventArgs args)
+    {
+        if (!_uiReady) return;
+        var value = (uint)Math.Clamp((int)Math.Round(sender.Value), 2, 20);
+        UpsertTomlValue("corrections", "min_auto_learn_repeats", value.ToString(CultureInfo.InvariantCulture));
+    }
+
+    private void OnAddCorrectionClick(object sender, RoutedEventArgs e)
+    {
+        var from = CorrectionFromBox.Text.Trim();
+        var to = CorrectionToBox.Text.Trim();
+        if (string.IsNullOrWhiteSpace(from) || string.IsNullOrWhiteSpace(to)) return;
+
+        var doc = LoadCorrectionsDoc();
+        var existing = doc.Entries.FirstOrDefault(e =>
+            string.Equals(e.From, from, StringComparison.OrdinalIgnoreCase));
+        if (existing is null)
+        {
+            doc.Entries.Add(new CorrectionsDocEntry { From = from, To = to, Hits = 0 });
+        }
+        else
+        {
+            existing.To = to;
+        }
+        SaveCorrectionsDoc(doc);
+        CorrectionFromBox.Text = string.Empty;
+        CorrectionToBox.Text = string.Empty;
+        RefreshCorrectionsList();
+    }
+
+    private void OnDeleteCorrectionClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button btn || btn.Tag is not string from) return;
+        var doc = LoadCorrectionsDoc();
+        doc.Entries = doc.Entries
+            .Where(e => !string.Equals(e.From, from, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        SaveCorrectionsDoc(doc);
+        RefreshCorrectionsList();
+    }
+
+    private void RefreshCorrectionsList()
+    {
+        var doc = LoadCorrectionsDoc();
+        _correctionEntries.Clear();
+        foreach (var entry in doc.Entries.OrderBy(e => e.From, StringComparer.OrdinalIgnoreCase))
+        {
+            _correctionEntries.Add(new CorrectionEntryItem
+            {
+                From = entry.From,
+                Label = $"{entry.From} → {entry.To} (hits: {entry.Hits})"
+            });
+        }
+    }
+
+    private string GetCorrectionsPath()
+    {
+        var configured = (GetTomlString("corrections", "dictionary_path") ?? string.Empty).Trim();
+        if (!string.IsNullOrWhiteSpace(configured)) return configured;
+        return Path.Combine(_modelsDir, "shared_corrections.v1.json");
+    }
+
+    private CorrectionsDocModel LoadCorrectionsDoc()
+    {
+        var path = GetCorrectionsPath();
+        try
+        {
+            if (!File.Exists(path))
+            {
+                var empty = new CorrectionsDocModel
+                {
+                    UpdatedAt = DateTimeOffset.UtcNow.ToString("O"),
+                    Entries = new List<CorrectionsDocEntry>()
+                };
+                SaveCorrectionsDoc(empty);
+                return empty;
+            }
+            var raw = File.ReadAllText(path);
+            return JsonSerializer.Deserialize<CorrectionsDocModel>(raw, new JsonSerializerOptions
+            {
+                PropertyNameCaseInsensitive = true
+            }) ?? new CorrectionsDocModel();
+        }
+        catch
+        {
+            return new CorrectionsDocModel();
+        }
+    }
+
+    private void SaveCorrectionsDoc(CorrectionsDocModel doc)
+    {
+        var path = GetCorrectionsPath();
+        var parent = Path.GetDirectoryName(path);
+        if (!string.IsNullOrWhiteSpace(parent)) Directory.CreateDirectory(parent);
+
+        doc.SchemaVersion = "dictator_corrections.v1";
+        doc.UpdatedAt = DateTimeOffset.UtcNow.ToString("O");
+        var json = JsonSerializer.Serialize(doc, new JsonSerializerOptions
+        {
+            WriteIndented = true,
+            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+        });
+        File.WriteAllText(path, json);
+    }
 
     private async Task<string?> PickFolderAsync(string preferredPath)
     {
@@ -1158,6 +1426,12 @@ public sealed partial class MainWindow : Window
     {
         try
         {
+            if (File.Exists(path))
+            {
+                Process.Start(new ProcessStartInfo { FileName = path, UseShellExecute = true });
+                return;
+            }
+
             Directory.CreateDirectory(path);
             Process.Start(new ProcessStartInfo { FileName = path, UseShellExecute = true });
         }
@@ -1557,6 +1831,47 @@ public sealed partial class MainWindow : Window
 
         [JsonPropertyName("registered_at")]
         public string? RegisteredAt { get; set; }
+    }
+
+    private sealed class HistoryEntryItem
+    {
+        public string Id { get; set; } = string.Empty;
+        public string Title { get; set; } = string.Empty;
+        public string Preview { get; set; } = string.Empty;
+        public string AudioPath { get; set; } = string.Empty;
+        public string TextPath { get; set; } = string.Empty;
+        public string MetaPath { get; set; } = string.Empty;
+        public DateTime SortKey { get; set; }
+    }
+
+    private sealed class CorrectionEntryItem
+    {
+        public string From { get; set; } = string.Empty;
+        public string Label { get; set; } = string.Empty;
+    }
+
+    private sealed class CorrectionsDocModel
+    {
+        [JsonPropertyName("schema_version")]
+        public string SchemaVersion { get; set; } = "dictator_corrections.v1";
+
+        [JsonPropertyName("updated_at")]
+        public string UpdatedAt { get; set; } = string.Empty;
+
+        [JsonPropertyName("entries")]
+        public List<CorrectionsDocEntry> Entries { get; set; } = new();
+    }
+
+    private sealed class CorrectionsDocEntry
+    {
+        [JsonPropertyName("from")]
+        public string From { get; set; } = string.Empty;
+
+        [JsonPropertyName("to")]
+        public string To { get; set; } = string.Empty;
+
+        [JsonPropertyName("hits")]
+        public ulong Hits { get; set; }
     }
 
     public sealed class CatalogModelItem : INotifyPropertyChanged

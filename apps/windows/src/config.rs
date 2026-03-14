@@ -25,6 +25,10 @@ pub struct Config {
     pub runtime: RuntimeConfig,
     #[serde(default)]
     pub ui: UiConfig,
+    #[serde(default)]
+    pub storage: StorageConfig,
+    #[serde(default)]
+    pub corrections: CorrectionsConfig,
 }
 
 /// Memory management configuration
@@ -99,6 +103,67 @@ impl Default for RuntimeConfig {
     fn default() -> Self {
         Self {
             preference: RuntimePreference::Auto,
+        }
+    }
+}
+
+/// Storage layout configuration used by history/recordings.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StorageConfig {
+    #[serde(default = "default_audio_history_dir")]
+    pub audio_history_dir: PathBuf,
+    #[serde(default = "default_transcripts_dir")]
+    pub transcripts_dir: PathBuf,
+}
+
+fn default_history_root_dir() -> PathBuf {
+    dirs::document_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("Dictator")
+        .join("History")
+}
+
+fn default_audio_history_dir() -> PathBuf {
+    default_history_root_dir().join("audio")
+}
+
+fn default_transcripts_dir() -> PathBuf {
+    default_history_root_dir().join("transcripts")
+}
+
+impl Default for StorageConfig {
+    fn default() -> Self {
+        Self {
+            audio_history_dir: default_audio_history_dir(),
+            transcripts_dir: default_transcripts_dir(),
+        }
+    }
+}
+
+/// Deterministic post-ASR corrections dictionary configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CorrectionsConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_true")]
+    pub auto_learn: bool,
+    #[serde(default = "default_auto_learn_min_repeats")]
+    pub min_auto_learn_repeats: u32,
+    #[serde(default)]
+    pub dictionary_path: Option<PathBuf>,
+}
+
+fn default_auto_learn_min_repeats() -> u32 {
+    3
+}
+
+impl Default for CorrectionsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_true(),
+            auto_learn: default_true(),
+            min_auto_learn_repeats: default_auto_learn_min_repeats(),
+            dictionary_path: None,
         }
     }
 }
@@ -297,6 +362,8 @@ impl Default for Config {
             memory: MemoryConfig::default(),
             runtime: RuntimeConfig::default(),
             ui: UiConfig::default(),
+            storage: StorageConfig::default(),
+            corrections: CorrectionsConfig::default(),
         }
     }
 }

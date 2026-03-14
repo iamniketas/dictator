@@ -13,6 +13,7 @@ use tracing::{error, info, warn};
 
 use dictator::audio::AudioRecorder;
 use dictator::config::{Config, RuntimePreference, WhisperBackend};
+use dictator::corrections::CorrectionsManager;
 use dictator::history::HistoryManager;
 use dictator::input::{self, HotkeyEvent};
 use dictator::llm::OllamaClient;
@@ -1295,10 +1296,31 @@ fn main() -> Result<()> {
     let overlay = Arc::new(OverlayWindow::new(overlay_config)?);
 
     // Create history manager
-    let history = Arc::new(HistoryManager::new(config.history.retention_days)?);
+    let history = Arc::new(HistoryManager::new(
+        config.storage.audio_history_dir.clone(),
+        config.storage.transcripts_dir.clone(),
+        config.history.retention_days,
+    )?);
     info!(
         "[MAIN] History manager created, enabled: {}",
         config.history.enabled
+    );
+    let history_root = config
+        .storage
+        .audio_history_dir
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| {
+            dirs::document_dir()
+                .unwrap_or_else(std::env::temp_dir)
+                .join("Dictator")
+                .join("History")
+        });
+
+    let corrections = Arc::new(CorrectionsManager::new(&config.corrections)?);
+    info!(
+        "[MAIN] Corrections dictionary: {:?}",
+        corrections.dictionary_path()
     );
 
     // Set up history callbacks for tray menu
@@ -1348,18 +1370,14 @@ fn main() -> Result<()> {
     {
         let config_path_for_settings = Config::config_path();
         let models_dir_for_settings = models_dir.clone();
+        let history_root_for_settings = history_root.clone();
 
         ui::set_settings_callback(move || {
-            let history_dir = dirs::document_dir()
-                .unwrap_or_else(std::env::temp_dir)
-                .join("Dictator")
-                .join("History");
-
             if try_open_winui_settings_host(
                 &config_path_for_settings,
                 &models_dir_for_settings,
                 &model_store::default_store_path(),
-                &history_dir,
+                &history_root_for_settings,
                 false,
             ) {
                 return;
@@ -1385,31 +1403,24 @@ fn main() -> Result<()> {
     {
         let config_path_for_welcome = Config::config_path();
         let models_dir_for_welcome = models_dir.clone();
+        let history_root_for_welcome = history_root.clone();
         ui::set_settings_welcome_callback(move || {
-            let history_dir = dirs::document_dir()
-                .unwrap_or_else(std::env::temp_dir)
-                .join("Dictator")
-                .join("History");
             let _ = try_open_winui_settings_host(
                 &config_path_for_welcome,
                 &models_dir_for_welcome,
                 &model_store::default_store_path(),
-                &history_dir,
+                &history_root_for_welcome,
                 true,
             );
         });
     }
 
     if is_first_run() {
-        let history_dir = dirs::document_dir()
-            .unwrap_or_else(std::env::temp_dir)
-            .join("Dictator")
-            .join("History");
         if try_open_winui_settings_host(
             &Config::config_path(),
             &models_dir,
             &model_store::default_store_path(),
-            &history_dir,
+            &history_root,
             true,
         ) {
             mark_onboarding_completed();
@@ -1626,6 +1637,7 @@ fn main() -> Result<()> {
     let config_clone = config.clone();
     let streaming_tx_clone = streaming_tx.clone();
     let history_clone = history.clone();
+    let corrections_clone = corrections.clone();
     let engine_clone = shared_engine.clone();
     let active_model_path_clone = active_model_path.clone();
     let policy_fallback_models_clone = policy_fallback_models.clone();
@@ -1636,6 +1648,7 @@ fn main() -> Result<()> {
 
     std::thread::spawn(move || {
         let history = history_clone;
+        let corrections = corrections_clone;
         let mut saved_hwnd: Option<isize> = None;
         let mut is_recording = false;
         let mut streaming_transcriber: Option<StreamingTranscriber> = None;
@@ -2433,19 +2446,21 @@ fn main() -> Result<()> {
                     }
 
                     // Correct text with Ollama (if enabled via config or tray toggle)
-                    let final_text = if ui::is_ollama_enabled() {
+                    let llm_text = if ui::is_ollama_enabled() {
                         overlay_clone.update_status_text("Correcting...");
                         match ollama_clone.correct_text(&raw_text) {
                             Ok(corrected) => corrected,
                             Err(e) => {
                                 error!("LLM correction error: {}", e);
-                                raw_text // Use raw text if correction fails
+                                raw_text.clone() // Use raw text if correction fails
                             }
                         }
                     } else {
                         info!("Ollama disabled in config, using raw transcription");
-                        raw_text
+                        raw_text.clone()
                     };
+                    corrections.learn_from_pair(&raw_text, &llm_text);
+                    let final_text = corrections.apply(&llm_text);
 
                     let active_model_for_telemetry = active_model_path_clone
                         .read()

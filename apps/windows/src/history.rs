@@ -1,9 +1,9 @@
 //! History module - Save and manage audio recordings and transcriptions
 //!
-//! Stores files in the project directory under `recordings/YYYY-MM-DD/`
-//! - Audio: `{timestamp}.wav`
-//! - Text: `{timestamp}.txt`
-//! - Metadata: `{timestamp}.json`
+//! Stores files in configured storage directories:
+//! - Audio: `<audio_dir>/YYYY-MM-DD/{timestamp}.wav`
+//! - Text: `<transcripts_dir>/YYYY-MM-DD/{timestamp}.txt`
+//! - Metadata: `<transcripts_dir>/YYYY-MM-DD/{timestamp}.json`
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -36,45 +36,27 @@ pub struct Recording {
 
 /// History manager for saving and retrieving recordings
 pub struct HistoryManager {
-    base_dir: PathBuf,
+    audio_dir: PathBuf,
+    transcripts_dir: PathBuf,
     retention_days: u32,
 }
 
 impl HistoryManager {
-    /// Create new history manager with default recordings directory in project
-    pub fn new(retention_days: u32) -> Result<Self> {
-        let base_dir = Self::get_recordings_dir()?;
-        fs::create_dir_all(&base_dir)?;
+    /// Create history manager from explicit storage directories.
+    pub fn new(audio_dir: PathBuf, transcripts_dir: PathBuf, retention_days: u32) -> Result<Self> {
+        fs::create_dir_all(&audio_dir)?;
+        fs::create_dir_all(&transcripts_dir)?;
 
         info!(
-            "[HISTORY] Initialized at {:?}, retention: {} days",
-            base_dir, retention_days
+            "[HISTORY] Initialized audio={:?}, transcripts={:?}, retention: {} days",
+            audio_dir, transcripts_dir, retention_days
         );
 
         Ok(Self {
-            base_dir,
+            audio_dir,
+            transcripts_dir,
             retention_days,
         })
-    }
-
-    /// Get the recordings directory (project_dir/recordings)
-    fn get_recordings_dir() -> Result<PathBuf> {
-        // Try to use project directory first
-        if let Ok(cwd) = std::env::current_dir() {
-            let recordings_dir = cwd.join("recordings");
-            // Check if we can write here
-            if recordings_dir.exists() || fs::create_dir_all(&recordings_dir).is_ok() {
-                return Ok(recordings_dir);
-            }
-        }
-
-        // Fallback to data_dir
-        let data_dir = dirs::data_dir()
-            .unwrap_or_else(std::env::temp_dir)
-            .join("dictator")
-            .join("recordings");
-        fs::create_dir_all(&data_dir)?;
-        Ok(data_dir)
     }
 
     /// Generate timestamp-based ID
@@ -87,9 +69,9 @@ impl HistoryManager {
     }
 
     /// Get today's subdirectory path
-    fn today_dir(&self) -> PathBuf {
+    fn today_subdir(&self) -> String {
         let today = chrono::Local::now().format("%Y-%m-%d").to_string();
-        self.base_dir.join(&today)
+        today
     }
 
     /// Save a new recording
@@ -102,12 +84,15 @@ impl HistoryManager {
         language: &str,
     ) -> Result<Recording> {
         let id = Self::generate_id();
-        let today_dir = self.today_dir();
-        fs::create_dir_all(&today_dir)?;
+        let today = self.today_subdir();
+        let today_audio_dir = self.audio_dir.join(&today);
+        let today_transcripts_dir = self.transcripts_dir.join(&today);
+        fs::create_dir_all(&today_audio_dir)?;
+        fs::create_dir_all(&today_transcripts_dir)?;
 
-        let audio_path = today_dir.join(format!("{}.wav", id));
-        let text_path = today_dir.join(format!("{}.txt", id));
-        let meta_path = today_dir.join(format!("{}.json", id));
+        let audio_path = today_audio_dir.join(format!("{}.wav", id));
+        let text_path = today_transcripts_dir.join(format!("{}.txt", id));
+        let meta_path = today_transcripts_dir.join(format!("{}.json", id));
 
         // Save audio as WAV
         self.save_wav(audio_data, &audio_path)?;
@@ -117,8 +102,7 @@ impl HistoryManager {
         );
 
         // Save text
-        let mut text_file = fs::File::create(&text_path)?;
-        text_file.write_all(text.as_bytes())?;
+        Self::write_atomic_text(&text_path, text)?;
         info!(
             "[HISTORY] Saved text: {:?} ({} chars)",
             text_path,
@@ -140,8 +124,7 @@ impl HistoryManager {
             text_preview,
         };
         let meta_json = serde_json::to_string_pretty(&metadata)?;
-        let mut meta_file = fs::File::create(&meta_path)?;
-        meta_file.write_all(meta_json.as_bytes())?;
+        Self::write_atomic_text(&meta_path, &meta_json)?;
 
         // Clean up old recordings
         if let Err(e) = self.cleanup_old_recordings() {
@@ -178,12 +161,26 @@ impl HistoryManager {
         Ok(())
     }
 
+    fn write_atomic_text(path: &Path, text: &str) -> Result<()> {
+        let mut tmp = path.to_path_buf();
+        tmp.set_extension("tmp");
+        let mut text_file = fs::File::create(&tmp)?;
+        text_file.write_all(text.as_bytes())?;
+        text_file.flush()?;
+        drop(text_file);
+        if path.exists() {
+            let _ = fs::remove_file(path);
+        }
+        fs::rename(tmp, path)?;
+        Ok(())
+    }
+
     /// Get list of recent recordings (newest first)
     pub fn get_recent_recordings(&self, limit: usize) -> Vec<Recording> {
         let mut recordings = Vec::new();
 
         // Read all date directories
-        let Ok(entries) = fs::read_dir(&self.base_dir) else {
+        let Ok(entries) = fs::read_dir(&self.transcripts_dir) else {
             return recordings;
         };
 
@@ -229,10 +226,15 @@ impl HistoryManager {
     /// Load recording from metadata file
     fn load_recording_from_meta(&self, meta_path: &Path) -> Option<Recording> {
         let id = meta_path.file_stem()?.to_str()?.to_string();
-        let dir = meta_path.parent()?;
+        let transcripts_day_dir = meta_path.parent()?;
+        let day = transcripts_day_dir
+            .file_name()?
+            .to_string_lossy()
+            .to_string();
+        let audio_day_dir = self.audio_dir.join(day);
 
-        let audio_path = dir.join(format!("{}.wav", id));
-        let text_path = dir.join(format!("{}.txt", id));
+        let audio_path = audio_day_dir.join(format!("{}.wav", id));
+        let text_path = transcripts_day_dir.join(format!("{}.txt", id));
 
         let meta_content = fs::read_to_string(meta_path).ok()?;
         let metadata: RecordingMetadata = serde_json::from_str(&meta_content).ok()?;
@@ -266,9 +268,9 @@ impl HistoryManager {
 
     /// Open recordings folder in explorer
     pub fn open_folder(&self) -> Result<()> {
-        info!("[HISTORY] Opening folder: {:?}", self.base_dir);
+        info!("[HISTORY] Opening folder: {:?}", self.transcripts_dir);
         std::process::Command::new("explorer")
-            .arg(&self.base_dir)
+            .arg(&self.transcripts_dir)
             .spawn()?;
         Ok(())
     }
@@ -282,7 +284,7 @@ impl HistoryManager {
         let cutoff = chrono::Local::now() - chrono::Duration::days(self.retention_days as i64);
         let cutoff_str = cutoff.format("%Y-%m-%d").to_string();
 
-        let entries = fs::read_dir(&self.base_dir)?;
+        let entries = fs::read_dir(&self.transcripts_dir)?;
         let mut cleaned = 0;
 
         for entry in entries {
@@ -300,6 +302,11 @@ impl HistoryManager {
             if dir_name_str.as_ref() <= cutoff_str.as_str() {
                 info!("[HISTORY] Removing old directory: {:?}", path);
                 fs::remove_dir_all(&path)?;
+                let day = dir_name_str.to_string();
+                let audio_day = self.audio_dir.join(&day);
+                if audio_day.exists() {
+                    fs::remove_dir_all(audio_day)?;
+                }
                 cleaned += 1;
             }
         }
@@ -313,7 +320,7 @@ impl HistoryManager {
 
     /// Get base directory path
     pub fn base_dir(&self) -> &Path {
-        &self.base_dir
+        &self.transcripts_dir
     }
 }
 
