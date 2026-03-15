@@ -387,10 +387,10 @@ fn runtime_prefers_gpu(pref: &RuntimePreference) -> bool {
 }
 
 fn server_device_hint(pref: &RuntimePreference) -> Option<String> {
-    if matches!(pref, RuntimePreference::ForceCpu) {
-        Some(String::from("cpu"))
-    } else {
-        Some(String::from("auto"))
+    match pref {
+        RuntimePreference::ForceCpu => Some(String::from("cpu")),
+        RuntimePreference::ForceGpu => Some(String::from("cuda")),
+        RuntimePreference::Auto => Some(String::from("auto")),
     }
 }
 
@@ -1907,6 +1907,7 @@ fn main() -> Result<()> {
                         }
                         let streaming_enabled = ui::is_streaming_enabled();
                         let chunk_seconds = ui::streaming_chunk_seconds();
+                        let mut recording_backend_is_embedded = is_embedded;
                         overlay_clone.update_status_text(&format_recording_status(
                             Duration::from_secs(0),
                             streaming_enabled,
@@ -1932,7 +1933,28 @@ fn main() -> Result<()> {
                                 whisper_status_text = "Whisper: starting...".to_string();
                                 if let Err(e) = whisper_manager.start_if_needed() {
                                     warn!("[MAIN] Whisper server warmup start failed: {}", e);
-                                    whisper_status_text = "Whisper: startup error".to_string();
+                                    if let Some(new_model_path) = try_switch_to_next_fallback_model(
+                                        &config_clone,
+                                        &active_model_path_clone,
+                                        &engine,
+                                        &policy_fallback_models,
+                                    ) {
+                                        warn!(
+                                            "[POLICY] Warmup fallback: switching to embedded model {:?}",
+                                            new_model_path
+                                        );
+                                        recording_backend_is_embedded = true;
+                                        live_backend = WhisperBackend::Embedded;
+                                        whisper_ready = whisper_engine::is_engine_loaded(&engine);
+                                        whisper_status_text = if whisper_ready {
+                                            "Whisper: embedded fallback ready".to_string()
+                                        } else {
+                                            "Whisper: embedded fallback (load on first chunk)"
+                                                .to_string()
+                                        };
+                                    } else {
+                                        whisper_status_text = "Whisper: startup error".to_string();
+                                    }
                                 }
                             }
                         }
@@ -1962,7 +1984,7 @@ fn main() -> Result<()> {
                             accumulated_text.clear();
                             let chunk_seconds = ui::streaming_chunk_seconds();
                             info!("[MAIN] Streaming chunk duration: {}s", chunk_seconds);
-                            streaming_transcriber = Some(if is_embedded {
+                            streaming_transcriber = Some(if recording_backend_is_embedded {
                                 let model_path = active_model_path_clone
                                     .read()
                                     .map(|g| g.clone())

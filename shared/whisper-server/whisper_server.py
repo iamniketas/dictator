@@ -238,10 +238,22 @@ def validate_local_model_path(model_path: str):
         )
 
     if path_obj.is_dir() and not (path_obj / "model.bin").exists():
-        return (
-            f"Model directory exists but model.bin is missing: {path_obj}\n"
-            f"Expected file: {path_obj / 'model.bin'}"
+        # transformers snapshots (Parakeet/Canary/Granite and similar) do not have model.bin
+        # and should be accepted when config/tokenizer artifacts are present.
+        has_transformers_artifacts = (
+            (path_obj / "config.json").exists()
+            and (
+                (path_obj / "preprocessor_config.json").exists()
+                or (path_obj / "tokenizer.json").exists()
+                or (path_obj / "tokenizer_config.json").exists()
+                or (path_obj / "generation_config.json").exists()
+            )
         )
+        if not has_transformers_artifacts:
+            return (
+                f"Model directory exists but model.bin is missing: {path_obj}\n"
+                f"Expected file: {path_obj / 'model.bin'}"
+            )
 
     return None
 

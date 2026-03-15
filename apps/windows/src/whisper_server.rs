@@ -15,6 +15,7 @@ const CREATE_NO_WINDOW: u32 = 0x08000000;
 pub struct WhisperServerManager {
     model_path: String,
     python_executable: Option<PathBuf>,
+    runtime_hint: Option<String>,
     preferred_device: Option<String>,
     child: Option<Child>,
     owns_process: bool,
@@ -22,10 +23,11 @@ pub struct WhisperServerManager {
 
 impl WhisperServerManager {
     pub fn new(model_path: String) -> Self {
-        let python_executable = resolve_runtime_profile_python(&model_path);
+        let (python_executable, runtime_hint) = resolve_runtime_profile_metadata(&model_path);
         Self {
             model_path,
             python_executable,
+            runtime_hint,
             preferred_device: None,
             child: None,
             owns_process: false,
@@ -75,6 +77,7 @@ impl WhisperServerManager {
                 model_arg,
                 self.python_executable.as_deref(),
                 self.preferred_device.as_deref(),
+                self.runtime_hint.as_deref(),
             )
                 .context("Failed to spawn whisper_server.py")?;
             self.child = Some(child);
@@ -122,7 +125,9 @@ impl WhisperServerManager {
 
     pub fn set_model_path(&mut self, model_path: String) {
         self.model_path = model_path;
-        self.python_executable = resolve_runtime_profile_python(&self.model_path);
+        let (python_executable, runtime_hint) = resolve_runtime_profile_metadata(&self.model_path);
+        self.python_executable = python_executable;
+        self.runtime_hint = runtime_hint;
     }
 
     pub fn set_preferred_device(&mut self, preferred_device: Option<String>) {
@@ -155,6 +160,7 @@ fn spawn_server_process(
     model_path: Option<&str>,
     python_executable: Option<&Path>,
     preferred_device: Option<&str>,
+    runtime_hint: Option<&str>,
 ) -> Result<Child> {
     // On Windows we only use GUI Python launchers to avoid any console flash.
     #[cfg(target_os = "windows")]
@@ -197,6 +203,9 @@ fn spawn_server_process(
         }
         if let Some(device) = preferred_device {
             cmd.env("WHISPER_DEVICE", device);
+        }
+        if let Some(runtime) = runtime_hint {
+            cmd.env("WHISPER_RUNTIME", runtime);
         }
 
         #[cfg(target_os = "windows")]
@@ -262,26 +271,38 @@ fn find_server_script() -> Result<PathBuf> {
 struct RuntimeProfileMarker {
     #[serde(alias = "ModelId", alias = "model_id")]
     model_id: Option<String>,
+    #[serde(alias = "ExecutionModelRef", alias = "execution_model_ref")]
+    execution_model_ref: Option<String>,
     #[serde(alias = "LocalModelPath", alias = "local_model_path")]
     local_model_path: Option<String>,
     #[serde(alias = "PythonPath", alias = "python_path")]
     python_path: Option<String>,
 }
 
-fn resolve_runtime_profile_python(model_path: &str) -> Option<PathBuf> {
+fn resolve_runtime_profile_metadata(model_path: &str) -> (Option<PathBuf>, Option<String>) {
     let path = Path::new(model_path);
     let model_id = path
         .file_name()
         .and_then(|v| v.to_str())
-        .map(|s| s.to_string())?;
+        .map(|s| s.to_string());
+    let Some(model_id) = model_id else {
+        return (None, None);
+    };
 
     let profiles_dir = hardware_profiler::default_audio_models_dir()
         .join("runtimes")
         .join("profiles");
     let marker_path = profiles_dir.join(format!("{}.json", model_id));
-    let raw = fs::read_to_string(marker_path).ok()?;
-    let marker = serde_json::from_str::<RuntimeProfileMarker>(&raw).ok()?;
+    let raw = match fs::read_to_string(marker_path) {
+        Ok(v) => v,
+        Err(_) => return (None, None),
+    };
+    let marker = match serde_json::from_str::<RuntimeProfileMarker>(&raw) {
+        Ok(v) => v,
+        Err(_) => return (None, None),
+    };
 
+    let mut python = None;
     if let Some(py) = marker.python_path {
         let py_path = PathBuf::from(py);
         if py_path.exists() {
@@ -290,16 +311,35 @@ fn resolve_runtime_profile_python(model_path: &str) -> Option<PathBuf> {
                 marker.model_id.as_deref().unwrap_or(&model_id),
                 py_path.display()
             );
-            return Some(py_path);
+            python = Some(py_path);
         }
     }
-    // If marker matches different local path, do not force wrong python.
+
+    // If marker matches different local path, do not force wrong python/runtime hint.
     if let Some(local_path) = marker.local_model_path
         && Path::new(&local_path) != path
     {
-        return None;
+        return (python, None);
     }
-    None
+
+    let runtime_hint = marker
+        .execution_model_ref
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .and_then(|model_ref| {
+            let lower = model_ref.to_ascii_lowercase();
+            if lower.starts_with("nvidia/parakeet")
+                || lower.starts_with("nvidia/canary")
+                || lower.starts_with("ibm-granite/")
+            {
+                Some(String::from("transformers"))
+            } else {
+                None
+            }
+        });
+
+    (python, runtime_hint)
 }
 
 fn resolve_whisper_server_log_file() -> Option<PathBuf> {
