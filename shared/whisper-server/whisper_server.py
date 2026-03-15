@@ -215,6 +215,7 @@ def validate_local_model_path(model_path: str):
     Returns None when valid or not-applicable, otherwise returns error string.
     """
     path_obj = Path(model_path).expanduser()
+    runtime_hint = os.getenv("WHISPER_RUNTIME", "").strip().lower()
 
     is_hf_ref = is_hf_like_ref(model_path)
 
@@ -238,6 +239,9 @@ def validate_local_model_path(model_path: str):
         )
 
     if path_obj.is_dir() and not (path_obj / "model.bin").exists():
+        if runtime_hint == "transformers":
+            # Explicit runtime override: allow transformers snapshots without model.bin.
+            return None
         # transformers snapshots (Parakeet/Canary/Granite and similar) do not have model.bin
         # and should be accepted when config/tokenizer artifacts are present.
         has_transformers_artifacts = (

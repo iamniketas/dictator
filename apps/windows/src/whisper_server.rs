@@ -315,12 +315,9 @@ fn resolve_runtime_profile_metadata(model_path: &str) -> (Option<PathBuf>, Optio
         }
     }
 
-    // If marker matches different local path, do not force wrong python/runtime hint.
-    if let Some(local_path) = marker.local_model_path
-        && Path::new(&local_path) != path
-    {
-        return (python, None);
-    }
+    // Keep runtime hint even if local path string formatting differs by case/slashes.
+    // We only require an existing python path from marker.
+    let _ = marker.local_model_path;
 
     let runtime_hint = marker
         .execution_model_ref
