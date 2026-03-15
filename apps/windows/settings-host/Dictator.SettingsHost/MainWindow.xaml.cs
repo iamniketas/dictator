@@ -44,6 +44,8 @@ public sealed partial class MainWindow : Window
     private bool _uiReady;
     private bool _closeHintShown;
     private bool _allowClose;
+    private bool _runtimeDiagnosticsLoaded;
+    private bool _historyLoaded;
     private HistoryEntryItem? _selectedHistory;
 
     public MainWindow()
@@ -169,11 +171,11 @@ public sealed partial class MainWindow : Window
         Directory.CreateDirectory(_audioHistoryDir);
         Directory.CreateDirectory(_transcriptsDir);
 
-        LoadCatalog();
         LoadConfigFields();
         RefreshStorageCards();
-        RefreshHistoryEntries();
         RefreshHardwareDiagnostics();
+        _runtimeDiagnosticsLoaded = true;
+        LoadCatalog();
         LoadCorrectionsConfigFields();
         RefreshCorrectionsList();
         RefreshWelcomeSummary();
@@ -455,29 +457,19 @@ public sealed partial class MainWindow : Window
 
     private string BuildRuntimeModelRecommendations(int score, bool hasCudaHint)
     {
-        var lines = new List<string>();
-
+        if (score >= 8 && hasCudaHint)
+        {
+            return "Recommended: large-v3-turbo or medium for local mode. Parakeet/Canary/Granite are available as server runtimes.";
+        }
         if (score >= 8)
         {
-            lines.Add("Recommended now: large-v3 / large-v3-turbo / medium (local Whisper).");
-            if (hasCudaHint)
-            {
-                lines.Add("High-end path: Parakeet, Canary Qwen and Granite are available via server runtime backend.");
-            }
+            return "Recommended: large-v3-turbo or medium for local mode. GPU server runtimes require NVIDIA CUDA.";
         }
-        else if (score >= 5)
+        if (score >= 5)
         {
-            lines.Add("Recommended now: base / small / medium (balanced local mode).");
-            lines.Add("Advanced GPU runtimes are optional and may require extra setup.");
+            return "Recommended: base, small or medium. Keep Auto runtime for balanced speed and quality.";
         }
-        else
-        {
-            lines.Add("Recommended now: tiny / base on CPU.");
-            lines.Add("If latency is too high, switch to cloud profile (ElevenLabs Scribe v2)." );
-        }
-
-        lines.Add("Catalog status: Whisper + Parakeet/Canary/Granite execution backends are integrated.");
-        return string.Join("\n", lines);
+        return "Recommended: tiny or base in CPU mode. If latency is too high, use cloud profile.";
     }
 
     private void RefreshStorageCards()
@@ -512,6 +504,19 @@ public sealed partial class MainWindow : Window
             "about" => "About",
             _ => "Models",
         };
+
+        if (tag == "runtime" && !_runtimeDiagnosticsLoaded)
+        {
+            RefreshHardwareDiagnostics();
+            LoadCatalog();
+            _runtimeDiagnosticsLoaded = true;
+        }
+
+        if (tag == "history" && !_historyLoaded)
+        {
+            RefreshHistoryEntries();
+            _historyLoaded = true;
+        }
     }
 
     private void OnGoToModelsClick(object sender, RoutedEventArgs e) => SelectNavByTag("models");
@@ -542,8 +547,6 @@ public sealed partial class MainWindow : Window
 
             UpsertTomlValue("whisper", "backend", QuoteToml("server"));
             UpsertTomlValue("whisper", "model_path", QuoteToml(runtimePath));
-            UpsertTomlValue("runtime", "preference", QuoteToml("auto"));
-            RuntimeModeCombo.SelectedIndex = 0;
             RuntimeSummary.Text = $"Selected {model.Name} (local).";
         }
         else

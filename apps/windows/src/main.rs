@@ -577,51 +577,50 @@ fn scan_available_models(config: &Config, current_path: &std::path::Path) -> Vec
         return Vec::new();
     };
 
-    let Ok(entries) = std::fs::read_dir(&models_dir) else {
-        return Vec::new();
-    };
+    let current_normalized = current_path
+        .to_string_lossy()
+        .replace('/', "\\")
+        .to_lowercase();
 
-    let current_name = current_path
-        .file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_default();
+    let embedded = model_store::discover_local_ggml_models(&models_dir).unwrap_or_default();
+    let server = discover_server_runtime_models(&models_dir);
 
-    let is_embedded = config.whisper.backend == WhisperBackend::Embedded;
+    let mut models: Vec<ModelMenuItem> = Vec::new();
 
-    let mut models: Vec<ModelMenuItem> = entries
-        .flatten()
-        .filter(|e| {
-            let path = e.path();
-            if is_embedded {
-                // Embedded: GGML .bin files
-                path.is_file() && path.extension().map(|ext| ext == "bin").unwrap_or(false)
-            } else {
-                // Server (legacy): CTranslate2 model directories
-                path.is_dir()
-            }
-        })
-        .enumerate()
-        .map(|(i, e)| {
-            let path = e.path();
-            let filename = e.file_name().to_string_lossy().to_string();
-            let name = filename.clone();
-            let is_current = filename == current_name;
-            let size_label = if is_embedded {
-                // For .bin files, use the file size directly
-                std::fs::metadata(&path)
-                    .map(|m| file_size_label_bytes(m.len()))
-                    .unwrap_or_default()
-            } else {
-                model_dir_size_label(&path)
-            };
-            ModelMenuItem {
-                index: i,
-                name,
-                is_current,
-                size_label,
-            }
-        })
-        .collect();
+    for path in embedded {
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default()
+            .to_string();
+        let path_str = path.to_string_lossy().to_string();
+        let is_current = path_str.replace('/', "\\").to_lowercase() == current_normalized;
+        let size_label = std::fs::metadata(&path)
+            .map(|m| file_size_label_bytes(m.len()))
+            .unwrap_or_default();
+        models.push(ModelMenuItem {
+            index: 0,
+            name,
+            is_current,
+            model_path: path_str,
+            backend_kind: String::from("embedded"),
+            size_label,
+        });
+    }
+
+    for (model_id, path) in server {
+        let path_str = path.to_string_lossy().to_string();
+        let is_current = path_str.replace('/', "\\").to_lowercase() == current_normalized;
+        let size_label = model_dir_size_label(&path);
+        models.push(ModelMenuItem {
+            index: 0,
+            name: model_id,
+            is_current,
+            model_path: path_str,
+            backend_kind: String::from("server"),
+            size_label,
+        });
+    }
 
     models.sort_by(|a, b| a.name.cmp(&b.name));
     for (i, m) in models.iter_mut().enumerate() {
@@ -1283,8 +1282,12 @@ fn main() -> Result<()> {
             .collect::<Vec<_>>(),
     ));
 
-    // Safe auto-heal: if configured model is missing, switch to best installed policy candidate.
-    if !config.whisper.model_path.is_file() {
+    // Safe auto-heal: only heal when current backend's model target is actually missing.
+    let model_target_missing = match config.whisper.backend {
+        WhisperBackend::Embedded => !config.whisper.model_path.is_file(),
+        WhisperBackend::Server => !config.whisper.model_path.exists(),
+    };
+    if model_target_missing {
         let policy_path = models_dir.join(&runtime_policy.preferred_model);
         if policy_path.is_file() {
             warn!(
@@ -1597,31 +1600,41 @@ fn main() -> Result<()> {
     }
 
     // Set up model selector callbacks
-    let config_for_models = config.clone();
     let active_model_path_for_list = active_model_path.clone();
     ui::set_model_list_callback(move || {
+        let live_cfg = match Config::load() {
+            Ok(v) => v,
+            Err(_) => return Vec::new(),
+        };
         let current = active_model_path_for_list
             .read()
             .map(|g| g.clone())
             .unwrap_or_default();
-        scan_available_models(&config_for_models, &current)
+        scan_available_models(&live_cfg, &current)
     });
 
-    let config_for_select = config.clone();
     let active_model_path_for_select = active_model_path.clone();
     let engine_for_select = shared_engine.clone();
     ui::set_model_select_callback(move |index| {
+        let live_cfg = match Config::load() {
+            Ok(v) => v,
+            Err(e) => {
+                error!("[MAIN] Failed to load config for model switch: {}", e);
+                return;
+            }
+        };
         let current = active_model_path_for_select
             .read()
             .map(|g| g.clone())
             .unwrap_or_default();
-        let models = scan_available_models(&config_for_select, &current);
+        let models = scan_available_models(&live_cfg, &current);
         if let Some(model) = models.get(index) {
-            let new_path = config_for_select
-                .whisper
-                .effective_models_dir()
-                .unwrap_or_default()
-                .join(&model.name);
+            let new_path = std::path::PathBuf::from(&model.model_path);
+            let new_backend = if model.backend_kind.eq_ignore_ascii_case("server") {
+                WhisperBackend::Server
+            } else {
+                WhisperBackend::Embedded
+            };
 
             // Hot-switch: update shared path + unload engine (reloads on next recording)
             if let Ok(mut guard) = active_model_path_for_select.write() {
@@ -1629,8 +1642,9 @@ fn main() -> Result<()> {
             }
             whisper_engine::unload_engine(&engine_for_select);
 
-            let mut updated = config_for_select.clone();
+            let mut updated = live_cfg.clone();
             updated.whisper.model_path = new_path.clone();
+            updated.whisper.backend = new_backend;
             if let Err(e) = updated.save() {
                 error!("[MAIN] Failed to save config after model switch: {}", e);
             } else {

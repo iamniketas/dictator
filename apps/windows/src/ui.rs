@@ -100,6 +100,10 @@ pub struct ModelMenuItem {
     pub index: usize,
     pub name: String,
     pub is_current: bool,
+    /// Absolute path to model file/directory used for activation.
+    pub model_path: String,
+    /// Backend kind: "embedded" or "server".
+    pub backend_kind: String,
     /// Human-readable size string, e.g. " (3.1 GB)". Empty if unknown.
     pub size_label: String,
 }
