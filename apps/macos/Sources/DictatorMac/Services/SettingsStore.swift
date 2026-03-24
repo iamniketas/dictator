@@ -2,12 +2,14 @@ import Foundation
 
 enum TranscriptionBackend: String, CaseIterable {
     case whisperKit = "whisperkit"
+    case mlx        = "mlx"
     case http       = "http"
 
     var displayName: String {
         switch self {
-        case .whisperKit: return "WhisperKit (on-device)"
-        case .http:       return "HTTP Server (Python)"
+        case .whisperKit: return "WhisperKit (CoreML, on-device)"
+        case .mlx:        return "MLX Server (Contora / OpenAI API)"
+        case .http:       return "HTTP Server (legacy Python)"
         }
     }
 }
@@ -40,11 +42,32 @@ final class SettingsStore {
         set { defaults.set(newValue, forKey: "whisperKitModelName") }
     }
 
-    // MARK: - HTTP backend
+    // MARK: - HTTP backend (legacy Python whisper-server)
 
     var httpEndpointURL: String {
         get { defaults.string(forKey: "httpEndpointURL") ?? "http://127.0.0.1:5500/transcribe" }
         set { defaults.set(newValue, forKey: "httpEndpointURL") }
+    }
+
+    // MARK: - MLX backend (Contora / OpenAI-compatible)
+
+    var mlxEndpointURL: String {
+        get {
+            // Auto-populate from shared NiketasAI config on first access.
+            if let stored = defaults.string(forKey: "mlxEndpointURL"), !stored.isEmpty { return stored }
+            return SharedTranscriptionServerConfig.load()?.mlxTranscribeURL
+                ?? "http://127.0.0.1:8000/v1/audio/transcriptions"
+        }
+        set { defaults.set(newValue, forKey: "mlxEndpointURL") }
+    }
+
+    var mlxModelID: String {
+        get {
+            if let stored = defaults.string(forKey: "mlxModelID"), !stored.isEmpty { return stored }
+            return SharedTranscriptionServerConfig.load()?.mlxModelID
+                ?? "mlx-community/whisper-large-v3-turbo-asr-fp16"
+        }
+        set { defaults.set(newValue, forKey: "mlxModelID") }
     }
 
     // MARK: - Streaming

@@ -96,6 +96,20 @@ final class AppModel: ObservableObject {
     @Published var httpEndpointURL: String {
         didSet { settings.httpEndpointURL = httpEndpointURL }
     }
+    @Published var mlxEndpointURL: String {
+        didSet {
+            settings.mlxEndpointURL = mlxEndpointURL
+            rebuildTranscriptionService()
+        }
+    }
+    @Published var mlxModelID: String {
+        didSet {
+            settings.mlxModelID = mlxModelID
+            rebuildTranscriptionService()
+        }
+    }
+    /// Tri-state: nil = not probed yet, true = reachable, false = unreachable.
+    @Published var mlxServerReachable: Bool? = nil
     @Published var hotkeyMode: HotkeyManager.TriggerMode {
         didSet { settings.hotkeyModeRaw = hotkeyMode.rawValue }
     }
@@ -155,36 +169,44 @@ final class AppModel: ObservableObject {
         transcriptionBackend  = settings.backend
         whisperKitModelName   = settings.whisperKitModelName
         httpEndpointURL       = settings.httpEndpointURL
+        mlxEndpointURL        = settings.mlxEndpointURL
+        mlxModelID            = settings.mlxModelID
         hotkeyMode        = HotkeyManager.TriggerMode(rawValue: settings.hotkeyModeRaw) ?? .smart
         llmEnabled        = settings.llmEnabled
         llmEndpointURL    = settings.llmEndpointURL
         llmModel          = settings.llmModel
         llmSystemPrompt   = settings.llmSystemPrompt
 
-        // Build transcription service
-        transcriptionService = AppModel.makeTranscriptionService(
-            backend: settings.backend,
-            whisperKitService: whisperKitService
-        )
+        // Build transcription service (MLX needs endpoint/model already set above)
+        switch settings.backend {
+        case .whisperKit: transcriptionService = whisperKitService
+        case .mlx:        transcriptionService = MLXTranscriptionService(
+                              endpointURL: settings.mlxEndpointURL, modelID: settings.mlxModelID)
+        case .http:       transcriptionService = WhisperHTTPTranscriptionService()
+        }
     }
 
     // MARK: - Transcription service factory
 
-    private static func makeTranscriptionService(
-        backend: TranscriptionBackend,
-        whisperKitService: WhisperKitTranscriptionService
-    ) -> TranscriptionService {
+    private func makeTranscriptionService(backend: TranscriptionBackend) -> TranscriptionService {
         switch backend {
         case .whisperKit: return whisperKitService
+        case .mlx:        return MLXTranscriptionService(endpointURL: mlxEndpointURL, modelID: mlxModelID)
         case .http:       return WhisperHTTPTranscriptionService()
         }
     }
 
     private func rebuildTranscriptionService() {
-        transcriptionService = AppModel.makeTranscriptionService(
-            backend: transcriptionBackend,
-            whisperKitService: whisperKitService
-        )
+        transcriptionService = makeTranscriptionService(backend: transcriptionBackend)
+    }
+
+    /// Probes the MLX server and updates `mlxServerReachable`. Safe to call any time.
+    func probeMlxServer() {
+        Task { [weak self] in
+            guard let self else { return }
+            let reachable = await SharedTranscriptionServerConfig.probeMLC(url: mlxEndpointURL)
+            await MainActor.run { self.mlxServerReachable = reachable }
+        }
     }
 
     // MARK: - Toggle recording (called by HotkeyManager and tray button)

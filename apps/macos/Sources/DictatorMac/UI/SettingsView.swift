@@ -42,10 +42,10 @@ private struct TranscriptionTab: View {
                 Text("Transcription Backend")
             }
 
-            if model.transcriptionBackend == .whisperKit {
-                whisperKitSection
-            } else {
-                httpSection
+            switch model.transcriptionBackend {
+            case .whisperKit: whisperKitSection
+            case .mlx:        mlxSection
+            case .http:       httpSection
             }
 
             Section {
@@ -119,17 +119,84 @@ private struct TranscriptionTab: View {
         whisperKit.loadState == .loading || whisperKit.loadState == .downloading
     }
 
+    // MARK: - MLX section
+
+    private var mlxSection: some View {
+        Section {
+            // Server status indicator
+            HStack {
+                Circle()
+                    .fill(mlxStatusColor)
+                    .frame(width: 8, height: 8)
+                Text(mlxStatusText)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("Check") { model.probeMlxServer() }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+            }
+            .onAppear { model.probeMlxServer() }
+
+            TextField("Endpoint URL", text: $model.mlxEndpointURL)
+                .textFieldStyle(.roundedBorder)
+
+            // Model picker: preset recommended models + current custom value
+            Picker("Model", selection: $model.mlxModelID) {
+                ForEach(MLXModelInfo.recommended) { info in
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(info.displayName)
+                        Text(info.note)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    .tag(info.id)
+                }
+                if !MLXModelInfo.recommended.map(\.id).contains(model.mlxModelID) {
+                    Text(model.mlxModelID).tag(model.mlxModelID)
+                }
+            }
+
+            // Allow typing a custom HuggingFace model ID
+            TextField("Custom model ID (HuggingFace)", text: $model.mlxModelID)
+                .textFieldStyle(.roundedBorder)
+                .font(.system(size: 12, design: .monospaced))
+
+        } header: {
+            Text("MLX Server (Contora / OpenAI API)")
+        } footer: {
+            Text("Requires Contora with MLX backend running. Config auto-loaded from ~/Library/Application Support/NiketasAI/runtime/transcription-server.json when available.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var mlxStatusColor: Color {
+        switch model.mlxServerReachable {
+        case .none:  return .secondary
+        case true:   return .green
+        case false:  return .red
+        }
+    }
+
+    private var mlxStatusText: String {
+        switch model.mlxServerReachable {
+        case .none:  return "Not checked"
+        case true:   return "Server reachable ✓"
+        case false:  return "Server not running"
+        }
+    }
+
     // MARK: - HTTP section
 
     private var httpSection: some View {
         Section {
             TextField("Endpoint URL", text: $model.httpEndpointURL)
                 .textFieldStyle(.roundedBorder)
-            Text("Whisper HTTP server must be running. See shared/whisper-server/.")
+            Text("Legacy Python whisper-server. See shared/whisper-server/.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         } header: {
-            Text("HTTP Server")
+            Text("HTTP Server (legacy)")
         }
     }
 }

@@ -8,14 +8,25 @@ struct WhisperKitModelInfo: Identifiable, Hashable {
     let displayName: String
     let approxSizeMB: Int
 
+    /// Full catalog of WhisperKit CoreML models available from argmaxinc/whisperkit-coreml.
+    /// Sorted by approximate size ascending (smallest = fastest).
     static let available: [WhisperKitModelInfo] = [
-        .init(id: "openai_whisper-tiny",           displayName: "tiny",             approxSizeMB: 75),
-        .init(id: "openai_whisper-base",           displayName: "base",             approxSizeMB: 145),
-        .init(id: "openai_whisper-small",          displayName: "small",            approxSizeMB: 480),
-        .init(id: "openai_whisper-medium",         displayName: "medium",           approxSizeMB: 1500),
-        .init(id: "openai_whisper-large-v2",       displayName: "large-v2",         approxSizeMB: 3000),
-        .init(id: "openai_whisper-large-v3",       displayName: "large-v3",         approxSizeMB: 3100),
-        .init(id: "openai_whisper-large-v3-turbo", displayName: "large-v3-turbo ✦", approxSizeMB: 1600),
+        // ── Tiny/Base: ultra-fast, works on any Apple Silicon ──────────────────
+        .init(id: "openai_whisper-tiny",                displayName: "tiny",                  approxSizeMB: 75),
+        .init(id: "openai_whisper-tiny.en",             displayName: "tiny.en (English)",      approxSizeMB: 75),
+        .init(id: "openai_whisper-base",                displayName: "base",                  approxSizeMB: 145),
+        .init(id: "openai_whisper-base.en",             displayName: "base.en (English)",      approxSizeMB: 145),
+        // ── Small/Medium: daily-driver tier ────────────────────────────────────
+        .init(id: "openai_whisper-small",               displayName: "small",                 approxSizeMB: 480),
+        .init(id: "openai_whisper-small.en",            displayName: "small.en (English)",     approxSizeMB: 480),
+        .init(id: "openai_whisper-medium",              displayName: "medium",                approxSizeMB: 1_500),
+        .init(id: "openai_whisper-medium.en",           displayName: "medium.en (English)",    approxSizeMB: 1_500),
+        // ── Distil-Whisper: 2× faster large-v3 with minimal accuracy loss ──────
+        .init(id: "distil-whisper_distil-large-v3",     displayName: "distil-large-v3 ⚡",    approxSizeMB: 800),
+        // ── Large: maximum accuracy ─────────────────────────────────────────────
+        .init(id: "openai_whisper-large-v3-turbo",      displayName: "large-v3-turbo ✦",      approxSizeMB: 1_600),
+        .init(id: "openai_whisper-large-v3",            displayName: "large-v3",              approxSizeMB: 3_100),
+        .init(id: "openai_whisper-large-v2",            displayName: "large-v2",              approxSizeMB: 3_000),
     ]
 }
 
