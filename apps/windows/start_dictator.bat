@@ -6,7 +6,7 @@ set "DICTATOR_EXE=target\release\dictator.exe"
 
 if not exist "%DICTATOR_EXE%" (
     echo [Dictator] %DICTATOR_EXE% not found. Building release...
-    cargo build --release
+    cargo build --release --features cuda
     if errorlevel 1 (
         echo [Dictator] Build failed.
         exit /b 1

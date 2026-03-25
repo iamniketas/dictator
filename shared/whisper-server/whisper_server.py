@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 """
-Whisper HTTP Server - Fast transcription service with model caching
-Loads faster-whisper model once at startup and keeps it in memory (GPU).
+Whisper HTTP Server - Fast transcription service with model caching.
+
+Supports two execution backends:
+- faster-whisper (existing path)
+- transformers ASR pipeline (for model refs like Canary/Granite/Parakeet)
 """
 import os
 import sys
 import tempfile
 from pathlib import Path
 from flask import Flask, request, jsonify
-from faster_whisper import WhisperModel
 import logging
 
 # Configure logging
@@ -25,14 +27,108 @@ except Exception:
 # Global model instance (loaded once)
 model = None
 model_info = {}
+model_runtime = "unknown"  # "faster_whisper" | "transformers_asr"
 SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_LOCAL_MODEL_DIR = SCRIPT_DIR / "models" / "faster-whisper-large-v2"
 
-def load_model(model_path, preferred_device=None, preferred_compute_type=None):
-    """Load Whisper model into memory"""
-    global model, model_info
 
-    # Prefer explicit values from env, otherwise use robust defaults.
+def is_hf_like_ref(model_path: str) -> bool:
+    path_obj = Path(model_path).expanduser()
+    return (
+        "/" in model_path
+        and "\\" not in model_path
+        and not model_path.startswith(".")
+        and not model_path.startswith("~")
+        and not path_obj.is_absolute()
+        and ":" not in model_path
+    )
+
+
+def prefers_transformers_backend(model_path: str) -> bool:
+    p = model_path.lower().strip()
+    if not p:
+        return False
+    if p.startswith("nvidia/canary"):
+        return True
+    if p.startswith("ibm-granite/"):
+        return True
+    if p.startswith("nvidia/parakeet"):
+        return True
+    # For generic HF refs we also prefer transformers first.
+    return is_hf_like_ref(model_path)
+
+
+def resolve_transformers_device(preferred_device: str | None):
+    try:
+        import torch  # type: ignore
+    except Exception as e:
+        raise RuntimeError(
+            "transformers backend requires torch. Install: pip install torch transformers accelerate"
+        ) from e
+
+    if preferred_device in ("cpu",):
+        return -1, torch.float32
+
+    cuda_available = torch.cuda.is_available()
+    if preferred_device in ("cuda", "auto", None):
+        if cuda_available:
+            return 0, torch.float16
+        return -1, torch.float32
+
+    # Unknown preference -> safe auto
+    if cuda_available:
+        return 0, torch.float16
+    return -1, torch.float32
+
+
+def load_transformers_model(model_path, preferred_device=None):
+    """Load HF model via transformers ASR pipeline."""
+    global model, model_info, model_runtime
+
+    try:
+        from transformers import pipeline  # type: ignore
+    except Exception as e:
+        raise RuntimeError(
+            "transformers backend requires 'transformers'. Install: pip install transformers accelerate"
+        ) from e
+
+    device_index, torch_dtype = resolve_transformers_device(preferred_device)
+    logger.info(
+        "Loading transformers ASR model '%s' on device=%s...",
+        model_path,
+        "cuda" if device_index >= 0 else "cpu",
+    )
+
+    asr = pipeline(
+        task="automatic-speech-recognition",
+        model=model_path,
+        device=device_index,
+        torch_dtype=torch_dtype,
+    )
+
+    model = asr
+    model_runtime = "transformers_asr"
+    model_info = {
+        "path": model_path,
+        "runtime": model_runtime,
+        "device": "cuda" if device_index >= 0 else "cpu",
+        "status": "loaded",
+    }
+    logger.info("Transformers ASR model loaded successfully")
+    return True
+
+
+def load_faster_whisper_model(model_path, preferred_device=None, preferred_compute_type=None):
+    """Load faster-whisper model into memory."""
+    global model, model_info, model_runtime
+
+    try:
+        from faster_whisper import WhisperModel
+    except Exception as e:
+        raise RuntimeError(
+            "faster-whisper backend requires 'faster-whisper'. Install: pip install faster-whisper"
+        ) from e
+
     device_candidates = [preferred_device] if preferred_device else ["auto", "cpu"]
     compute_candidates = [preferred_compute_type] if preferred_compute_type else ["int8_float16", "int8", "float16"]
 
@@ -40,23 +136,67 @@ def load_model(model_path, preferred_device=None, preferred_compute_type=None):
     for device in device_candidates:
         for compute_type in compute_candidates:
             try:
-                logger.info(f"Loading model '{model_path}' on device={device}, compute_type={compute_type}...")
-                model = WhisperModel(model_path, device=device, compute_type=compute_type)
+                logger.info(
+                    "Loading faster-whisper model '%s' on device=%s, compute_type=%s...",
+                    model_path,
+                    device,
+                    compute_type,
+                )
+                fw_model = WhisperModel(model_path, device=device, compute_type=compute_type)
+                model = fw_model
+                model_runtime = "faster_whisper"
                 model_info = {
                     "path": model_path,
+                    "runtime": model_runtime,
                     "device": device,
                     "compute_type": compute_type,
-                    "status": "loaded"
+                    "status": "loaded",
                 }
-                logger.info(f"Model loaded successfully on {device} ({compute_type})")
+                logger.info("faster-whisper model loaded successfully on %s (%s)", device, compute_type)
                 return True
             except Exception as e:
                 last_error = e
-                logger.warning(f"Model load failed on {device}/{compute_type}: {e}")
+                logger.warning("faster-whisper load failed on %s/%s: %s", device, compute_type, e)
 
-    model_info = {"status": "failed", "error": str(last_error)}
-    logger.error(f"Failed to load model: {last_error}")
+    raise RuntimeError(f"faster-whisper load failed: {last_error}")
+
+
+def load_model(model_path, preferred_device=None, preferred_compute_type=None):
+    """Load model with runtime fallback order based on model ref."""
+    global model_info
+
+    runtime_hint = os.getenv("WHISPER_RUNTIME", "").strip().lower()
+    try_transformers_first = runtime_hint == "transformers" or (
+        runtime_hint == "" and prefers_transformers_backend(model_path)
+    )
+
+    loaders = []
+    if try_transformers_first:
+        loaders = ["transformers", "faster_whisper"]
+    else:
+        loaders = ["faster_whisper", "transformers"]
+
+    errors = []
+    for loader in loaders:
+        try:
+            if loader == "transformers":
+                if load_transformers_model(model_path, preferred_device=preferred_device):
+                    return True
+            else:
+                if load_faster_whisper_model(
+                    model_path,
+                    preferred_device=preferred_device,
+                    preferred_compute_type=preferred_compute_type,
+                ):
+                    return True
+        except Exception as e:
+            errors.append(f"{loader}: {e}")
+            logger.warning("Model load via %s failed: %s", loader, e)
+
+    model_info = {"status": "failed", "error": " | ".join(errors)}
+    logger.error("Failed to load model. Errors: %s", model_info["error"])
     return False
+
 
 def resolve_model_name_or_path():
     """Resolve model from CLI/env with cross-platform defaults."""
@@ -66,8 +206,8 @@ def resolve_model_name_or_path():
         return os.getenv("WHISPER_MODEL_PATH")
     if os.getenv("WHISPER_MODEL"):
         return os.getenv("WHISPER_MODEL")
-    # Prefer repository-local model directory by default.
     return str(DEFAULT_LOCAL_MODEL_DIR)
+
 
 def validate_local_model_path(model_path: str):
     """
@@ -75,17 +215,17 @@ def validate_local_model_path(model_path: str):
     Returns None when valid or not-applicable, otherwise returns error string.
     """
     path_obj = Path(model_path).expanduser()
+    runtime_hint = os.getenv("WHISPER_RUNTIME", "").strip().lower()
 
-    # Heuristic: treat as local path if absolute, contains path separators,
-    # starts with '.'/'~', or exists on disk.
+    is_hf_ref = is_hf_like_ref(model_path)
+
     looks_like_path = (
         path_obj.is_absolute()
-        or "/" in model_path
         or "\\" in model_path
         or model_path.startswith(".")
         or model_path.startswith("~")
         or path_obj.exists()
-    )
+    ) and not is_hf_ref
 
     if not looks_like_path:
         return None
@@ -99,87 +239,109 @@ def validate_local_model_path(model_path: str):
         )
 
     if path_obj.is_dir() and not (path_obj / "model.bin").exists():
-        return (
-            f"Model directory exists but model.bin is missing: {path_obj}\n"
-            f"Expected file: {path_obj / 'model.bin'}"
+        if runtime_hint == "transformers":
+            # Explicit runtime override: allow transformers snapshots without model.bin.
+            return None
+        # transformers snapshots (Parakeet/Canary/Granite and similar) do not have model.bin
+        # and should be accepted when config/tokenizer artifacts are present.
+        has_transformers_artifacts = (
+            (path_obj / "config.json").exists()
+            and (
+                (path_obj / "preprocessor_config.json").exists()
+                or (path_obj / "tokenizer.json").exists()
+                or (path_obj / "tokenizer_config.json").exists()
+                or (path_obj / "generation_config.json").exists()
+            )
         )
+        if not has_transformers_artifacts:
+            return (
+                f"Model directory exists but model.bin is missing: {path_obj}\n"
+                f"Expected file: {path_obj / 'model.bin'}"
+            )
 
     return None
+
 
 def resolve_device():
     return os.getenv("WHISPER_DEVICE")
 
+
 def resolve_compute_type():
     return os.getenv("WHISPER_COMPUTE_TYPE")
 
+
 @app.route('/health', methods=['GET'])
 def health():
-    """Health check endpoint"""
     return jsonify({
         "status": "ok",
-        "model": model_info
+        "runtime": model_runtime,
+        "model": model_info,
     })
+
+
+def transcribe_with_faster_whisper(temp_path: str, language: str):
+    segments, info = model.transcribe(
+        temp_path,
+        language=language,
+        beam_size=5,
+        vad_filter=True,
+        vad_parameters=dict(min_silence_duration_ms=500),
+    )
+    text = " ".join([segment.text for segment in segments]).strip()
+    return text, getattr(info, "language", language), getattr(info, "duration", None)
+
+
+def transcribe_with_transformers(temp_path: str, language: str):
+    # Keep params minimal for max model compatibility.
+    out = model(temp_path)
+    if isinstance(out, dict):
+        text = (out.get("text") or "").strip()
+    else:
+        text = str(out).strip()
+    return text, language, None
+
 
 @app.route('/transcribe', methods=['POST'])
 def transcribe():
-    """
-    Transcribe audio file
-
-    Request:
-        - file: audio file (WAV, MP3, etc.)
-        - language: language code (optional, default: auto)
-
-    Response:
-        {"text": "transcribed text"}
-    """
     if model is None:
         return jsonify({"error": "Model not loaded"}), 500
 
-    # Get audio file
     if 'file' not in request.files:
         return jsonify({"error": "No file provided"}), 400
 
     audio_file = request.files['file']
     language = request.form.get('language', 'ru')
 
-    # Save to temp file (Windows-compatible)
     temp_file = tempfile.NamedTemporaryFile(suffix='.wav', delete=False)
     temp_path = temp_file.name
     temp_file.close()
     audio_file.save(temp_path)
 
     try:
-        # Transcribe
-        logger.info(f"Transcribing audio in {language}...")
-        segments, info = model.transcribe(
-            temp_path,
-            language=language,
-            beam_size=5,
-            vad_filter=True,
-            vad_parameters=dict(min_silence_duration_ms=500)
-        )
+        logger.info("Transcribing audio in %s using %s...", language, model_runtime)
+        if model_runtime == "transformers_asr":
+            result, out_lang, duration = transcribe_with_transformers(temp_path, language)
+        else:
+            result, out_lang, duration = transcribe_with_faster_whisper(temp_path, language)
 
-        # Collect text
-        result = " ".join([segment.text for segment in segments])
-        logger.info(f"Transcription complete: {len(result)} chars")
-
+        logger.info("Transcription complete: %d chars", len(result))
         return jsonify({
-            "text": result.strip(),
-            "language": info.language,
-            "duration": info.duration
+            "text": result,
+            "language": out_lang,
+            "duration": duration,
+            "runtime": model_runtime,
         })
 
     except Exception as e:
-        logger.error(f"Transcription failed: {e}")
-        return jsonify({"error": str(e)}), 500
+        logger.error("Transcription failed: %s", e)
+        return jsonify({"error": str(e), "runtime": model_runtime}), 500
 
     finally:
-        # Clean up temp file
         if os.path.exists(temp_path):
             os.remove(temp_path)
 
+
 if __name__ == '__main__':
-    # Get model from command line / env with platform-neutral defaults.
     model_path = resolve_model_name_or_path()
     device = resolve_device()
     compute_type = resolve_compute_type()
@@ -189,12 +351,10 @@ if __name__ == '__main__':
         logger.error(model_path_validation_error)
         sys.exit(1)
 
-    # Load model at startup
     if not load_model(model_path, preferred_device=device, preferred_compute_type=compute_type):
         logger.error("Failed to load model, exiting")
         sys.exit(1)
 
-    # Start server
     port = int(os.getenv("WHISPER_PORT", "5000"))
-    logger.info(f"Starting Whisper server on port {port}...")
+    logger.info("Starting Whisper server on port %s...", port)
     app.run(host='127.0.0.1', port=port, debug=False, threaded=True)

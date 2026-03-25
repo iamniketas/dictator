@@ -1,0 +1,27 @@
+name: macOS Smoke
+
+on:
+  push:
+    paths:
+      - "apps/macos/**"
+      - "scripts/macos/**"
+      - ".github/workflows/macos-smoke.yml"
+  pull_request:
+    paths:
+      - "apps/macos/**"
+      - "scripts/macos/**"
+      - ".github/workflows/macos-smoke.yml"
+
+jobs:
+  build:
+    runs-on: macos-14
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode 15.4
+        run: sudo xcode-select -s /Applications/Xcode_15.4.app/Contents/Developer
+
+      - name: Run macOS smoke build
+        run: ./scripts/macos/smoke_build.sh

@@ -1,0 +1,105 @@
+﻿{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/iamniketas/dictator/shared/contracts/runtime/runtime_policy.v1.json",
+  "title": "Runtime Policy Contract v1",
+  "description": "Deterministic runtime decision and fallback chain for transcription.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "policy_name",
+    "inputs",
+    "decision",
+    "fallback_chain"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "runtime_policy.v1"
+    },
+    "policy_name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "inputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["hardware_tier", "user_mode"],
+      "properties": {
+        "hardware_tier": {
+          "type": "string",
+          "enum": ["high", "medium", "low", "unknown"]
+        },
+        "user_mode": {
+          "type": "string",
+          "enum": ["auto", "force_gpu", "force_cpu", "force_model"]
+        },
+        "preferred_model_id": {
+          "type": ["string", "null"]
+        },
+        "available_models": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["backend", "device", "model_id"],
+      "properties": {
+        "backend": {
+          "type": "string",
+          "enum": ["embedded_whisper_rs", "faster_whisper", "whisperkit", "server"]
+        },
+        "device": {
+          "type": "string",
+          "enum": ["cuda", "metal", "cpu", "directml"]
+        },
+        "model_id": {
+          "type": "string"
+        },
+        "compute_type": {
+          "type": "string",
+          "enum": ["float16", "int8", "int8_float16", "default"]
+        },
+        "reason": {
+          "type": "string"
+        }
+      }
+    },
+    "fallback_chain": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["order", "backend", "device", "model_id"],
+        "properties": {
+          "order": { "type": "integer", "minimum": 1 },
+          "backend": {
+            "type": "string",
+            "enum": ["embedded_whisper_rs", "faster_whisper", "whisperkit", "server"]
+          },
+          "device": {
+            "type": "string",
+            "enum": ["cuda", "metal", "cpu", "directml"]
+          },
+          "model_id": { "type": "string" },
+          "stop_on_error_codes": {
+            "type": "array",
+            "items": { "type": "string" }
+          }
+        }
+      }
+    },
+    "cloud_fallback": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean", "default": false },
+        "provider": { "type": "string" },
+        "requires_user_opt_in": { "type": "boolean", "default": true }
+      }
+    }
+  }
+}

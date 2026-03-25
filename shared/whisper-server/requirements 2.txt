@@ -1,0 +1,10 @@
+flask>=3.0.0
+faster-whisper>=1.1.0
+
+# New execution backend for Canary/Granite/Parakeet
+transformers>=4.45.0
+accelerate>=0.34.0
+
+# Install appropriate torch build for your platform/GPU:
+# CUDA example: pip install torch --index-url https://download.pytorch.org/whl/cu121
+# CPU example:  pip install torch --index-url https://download.pytorch.org/whl/cpu

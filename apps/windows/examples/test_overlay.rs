@@ -7,9 +7,7 @@ use std::thread;
 use std::time::Duration;
 
 fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter("info")
-        .init();
+    tracing_subscriber::fmt().with_env_filter("info").init();
 
     println!("Starting overlay test...");
 

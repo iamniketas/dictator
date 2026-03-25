@@ -68,7 +68,7 @@ Key settings:
 key = "right_ctrl"   # Push-to-talk or Toggle with Right Ctrl
 
 [whisper]
-backend = "embedded"                                    # "embedded" (default) or "server" (legacy Python)
+backend = "embedded"                                    # "embedded" (default) or "server" (legacy Python)`r`n# Note: build with --features cuda to keep GPU path available; runtime mode auto still chooses CPU/GPU by hardware
 model_path = "C:\\Users\\you\\AppData\\Local\\whisper-models\\ggml-large-v3-turbo.bin"
 models_dir = "C:\\Users\\you\\AppData\\Local\\whisper-models\\"
 language = "ru"

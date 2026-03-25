@@ -1,8 +1,8 @@
 //! Audio module - Microphone capture using cpal
 
 use anyhow::Result;
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::SampleFormat;
+use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
@@ -41,7 +41,13 @@ impl AudioRecorder {
         let amplitude_thread = amplitude.clone();
 
         let thread_handle = thread::spawn(move || {
-            audio_thread(cmd_rx, data_tx, buffer_tx, is_recording_clone, amplitude_thread);
+            audio_thread(
+                cmd_rx,
+                data_tx,
+                buffer_tx,
+                is_recording_clone,
+                amplitude_thread,
+            );
         });
 
         Ok(Self {
@@ -83,7 +89,7 @@ impl AudioRecorder {
         // REMOVED: Check for is_recording - we need to be able to get buffer
         // even after stop to process final chunks
         self.cmd_tx.send(AudioCommand::GetBuffer)?;
-        
+
         // Wait for buffer data
         let (data, start_idx) = self.buffer_rx.lock().unwrap().recv().unwrap_or_default();
         Ok((data, start_idx))
@@ -156,7 +162,8 @@ fn audio_thread(
                 let stream_config: cpal::StreamConfig = config.into();
 
                 // Store device config for resampling
-                *device_config.lock().unwrap() = (stream_config.sample_rate.0, stream_config.channels);
+                *device_config.lock().unwrap() =
+                    (stream_config.sample_rate.0, stream_config.channels);
 
                 // Clone for callback
                 let buffer_clone = buffer.clone();
@@ -170,7 +177,9 @@ fn audio_thread(
                         move |data: &[f32], _: &cpal::InputCallbackInfo| {
                             if is_rec.load(Ordering::SeqCst) {
                                 if !data.is_empty() {
-                                    let rms = (data.iter().map(|s| s * s).sum::<f32>() / data.len() as f32).sqrt();
+                                    let rms = (data.iter().map(|s| s * s).sum::<f32>()
+                                        / data.len() as f32)
+                                        .sqrt();
                                     amplitude_clone.store(rms.to_bits(), Ordering::Relaxed);
                                 }
                                 buffer_clone.lock().unwrap().extend_from_slice(data);
@@ -186,7 +195,9 @@ fn audio_thread(
                                 let samples: Vec<f32> =
                                     data.iter().map(|&s| s as f32 / 32768.0).collect();
                                 if !samples.is_empty() {
-                                    let rms = (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt();
+                                    let rms = (samples.iter().map(|s| s * s).sum::<f32>()
+                                        / samples.len() as f32)
+                                        .sqrt();
                                     amplitude_clone.store(rms.to_bits(), Ordering::Relaxed);
                                 }
                                 buffer_clone.lock().unwrap().extend(samples);
@@ -204,7 +215,9 @@ fn audio_thread(
                                     .map(|&s| (s as f32 - 32768.0) / 32768.0)
                                     .collect();
                                 if !samples.is_empty() {
-                                    let rms = (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt();
+                                    let rms = (samples.iter().map(|s| s * s).sum::<f32>()
+                                        / samples.len() as f32)
+                                        .sqrt();
                                     amplitude_clone.store(rms.to_bits(), Ordering::Relaxed);
                                 }
                                 buffer_clone.lock().unwrap().extend(samples);
@@ -351,4 +364,3 @@ fn convert_to_16khz_mono(data: &[f32], sample_rate: u32, channels: u16) -> Vec<f
 
     output
 }
-

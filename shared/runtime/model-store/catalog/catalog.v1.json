@@ -1,0 +1,125 @@
+{
+  "schema_version": "model_catalog.v1",
+  "catalog_version": "0.3.0",
+  "updated_at": "2026-03-12T00:00:00Z",
+  "models": [
+    {
+      "id": "whisper-ggml-tiny",
+      "family": "whisper_ggml",
+      "display_name": "Whisper GGML tiny",
+      "size_bytes": 40894464,
+      "quality_profile": "fast",
+      "speed_profile": "fast",
+      "supported_backends": ["embedded_whisper_rs"],
+      "recommended_tiers": ["low", "medium"],
+      "download_filename": "ggml-tiny.bin",
+      "download_url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin",
+      "required_files": ["ggml-tiny.bin"]
+    },
+    {
+      "id": "whisper-ggml-base",
+      "family": "whisper_ggml",
+      "display_name": "Whisper GGML base",
+      "size_bytes": 77594624,
+      "quality_profile": "balanced",
+      "speed_profile": "balanced",
+      "supported_backends": ["embedded_whisper_rs"],
+      "recommended_tiers": ["low", "medium", "high"],
+      "download_filename": "ggml-base.bin",
+      "download_url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin",
+      "required_files": ["ggml-base.bin"]
+    },
+    {
+      "id": "whisper-ggml-small",
+      "family": "whisper_ggml",
+      "display_name": "Whisper GGML small",
+      "size_bytes": 255046656,
+      "quality_profile": "balanced",
+      "speed_profile": "balanced",
+      "supported_backends": ["embedded_whisper_rs"],
+      "recommended_tiers": ["medium", "high"],
+      "download_filename": "ggml-small.bin",
+      "download_url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin",
+      "required_files": ["ggml-small.bin"]
+    },
+    {
+      "id": "whisper-ggml-medium",
+      "family": "whisper_ggml",
+      "display_name": "Whisper GGML medium",
+      "size_bytes": 806354944,
+      "quality_profile": "high",
+      "speed_profile": "slow",
+      "supported_backends": ["embedded_whisper_rs"],
+      "recommended_tiers": ["medium", "high"],
+      "download_filename": "ggml-medium.bin",
+      "download_url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.bin",
+      "required_files": ["ggml-medium.bin"]
+    },
+    {
+      "id": "whisper-ggml-large-v3-turbo",
+      "family": "whisper_ggml",
+      "display_name": "Whisper GGML large-v3-turbo",
+      "size_bytes": 916455424,
+      "quality_profile": "high",
+      "speed_profile": "balanced",
+      "supported_backends": ["embedded_whisper_rs"],
+      "recommended_tiers": ["medium", "high"],
+      "download_filename": "ggml-large-v3-turbo.bin",
+      "download_url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin",
+      "required_files": ["ggml-large-v3-turbo.bin"]
+    },
+    {
+      "id": "whisper-ggml-large-v3",
+      "family": "whisper_ggml",
+      "display_name": "Whisper GGML large-v3",
+      "size_bytes": 1625292800,
+      "quality_profile": "high",
+      "speed_profile": "slow",
+      "supported_backends": ["embedded_whisper_rs"],
+      "recommended_tiers": ["medium", "high"],
+      "download_filename": "ggml-large-v3.bin",
+      "download_url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin",
+      "required_files": ["ggml-large-v3.bin"]
+    },
+    {
+      "id": "nvidia-parakeet-tdt-0.6b-v3",
+      "family": "parakeet",
+      "display_name": "NVIDIA Parakeet TDT 0.6B v3",
+      "size_bytes": 2726297600,
+      "quality_profile": "high",
+      "speed_profile": "fast",
+      "supported_backends": ["faster_whisper", "server"],
+      "recommended_tiers": ["medium", "high"]
+    },
+    {
+      "id": "nvidia-canary-1b-v2",
+      "family": "other",
+      "display_name": "NVIDIA Canary 1B v2",
+      "size_bytes": 5368709120,
+      "quality_profile": "high",
+      "speed_profile": "balanced",
+      "supported_backends": ["server"],
+      "recommended_tiers": ["medium", "high"]
+    },
+    {
+      "id": "ibm-granite-speech-3.3-8b",
+      "family": "other",
+      "display_name": "IBM Granite Speech 3.3 8B",
+      "size_bytes": 12884901888,
+      "quality_profile": "high",
+      "speed_profile": "slow",
+      "supported_backends": ["server"],
+      "recommended_tiers": ["medium", "high"]
+    },
+    {
+      "id": "elevenlabs-scribe-v2",
+      "family": "other",
+      "display_name": "ElevenLabs Scribe v2",
+      "size_bytes": 1,
+      "quality_profile": "high",
+      "speed_profile": "fast",
+      "supported_backends": ["server"],
+      "recommended_tiers": ["low", "medium", "high"]
+    }
+  ]
+}

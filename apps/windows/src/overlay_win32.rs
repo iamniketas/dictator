@@ -276,7 +276,8 @@ impl OverlayApp {
                 if !body_text.is_empty() {
                     const MAX_LINES: usize = 3;
                     const MAX_CHARS_PER_LINE: usize = 75;
-                    let visible_text = Self::get_last_lines(&body_text, MAX_LINES, MAX_CHARS_PER_LINE);
+                    let visible_text =
+                        Self::get_last_lines(&body_text, MAX_LINES, MAX_CHARS_PER_LINE);
 
                     let mut body_utf16: Vec<u16> = visible_text.encode_utf16().collect();
                     let mut body_rect = RECT {
@@ -285,7 +286,12 @@ impl OverlayApp {
                         right: config.width as i32 - 10,
                         bottom: config.height as i32 - 10,
                     };
-                    DrawTextW(mem_dc, &mut body_utf16, &mut body_rect, DT_LEFT | DT_TOP | DT_WORDBREAK);
+                    DrawTextW(
+                        mem_dc,
+                        &mut body_utf16,
+                        &mut body_rect,
+                        DT_LEFT | DT_TOP | DT_WORDBREAK,
+                    );
                 }
 
                 let _ = BitBlt(
@@ -319,12 +325,12 @@ impl OverlayApp {
         if text.is_empty() || max_lines == 0 {
             return text.to_string();
         }
-        
+
         // Split text into words and wrap to lines
         let words: Vec<&str> = text.split_whitespace().collect();
         let mut lines: Vec<String> = Vec::new();
         let mut current_line = String::new();
-        
+
         for word in words {
             if current_line.is_empty() {
                 current_line = word.to_string();
@@ -337,12 +343,12 @@ impl OverlayApp {
                 current_line = word.to_string();
             }
         }
-        
+
         // Don't forget last line
         if !current_line.is_empty() {
             lines.push(current_line);
         }
-        
+
         // Keep only last max_lines
         if lines.len() <= max_lines {
             lines.join("\n")
@@ -409,7 +415,8 @@ impl ApplicationHandler<OverlayCommand> for OverlayApp {
                 let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), a, LWA_ALPHA);
                 drop(state);
 
-                // Set position but DO NOT show
+                // Keep hidden on startup to avoid any first-frame flicker.
+                let _ = ShowWindow(hwnd, SW_HIDE);
                 let _ = SetWindowPos(
                     hwnd,
                     HWND_TOPMOST,
@@ -417,7 +424,7 @@ impl ApplicationHandler<OverlayCommand> for OverlayApp {
                     0,
                     0,
                     0,
-                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_HIDEWINDOW,
                 );
 
                 // Set rounded corners (12px radius)
@@ -569,7 +576,7 @@ impl ApplicationHandler<OverlayCommand> for OverlayApp {
                                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW,
                             );
                         } else {
-                            let _ = ShowWindow(hwnd, SW_HIDE);
+                            let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
                         }
                     }
                 }
@@ -582,9 +589,7 @@ impl ApplicationHandler<OverlayCommand> for OverlayApp {
                 let needs_redraw = state.is_recording;
                 drop(state);
 
-                if needs_redraw
-                    && let Some(window) = self.window.as_ref()
-                {
+                if needs_redraw && let Some(window) = self.window.as_ref() {
                     window.request_redraw();
                 }
             }

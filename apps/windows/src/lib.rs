@@ -4,15 +4,17 @@
 
 pub mod audio;
 pub mod config;
+pub mod corrections;
 pub mod history;
-pub mod model_downloader;
-pub mod settings_window;
-pub mod updater;
-pub mod transcribe;
-pub mod whisper_engine;
-pub mod llm;
-pub mod ui;
 pub mod input;
+pub mod llm;
+pub mod model_downloader;
 pub mod overlay_win32;
+pub mod runtime_adapter;
+pub mod settings_window;
 pub mod streaming;
+pub mod transcribe;
+pub mod ui;
+pub mod updater;
+pub mod whisper_engine;
 pub mod whisper_server;

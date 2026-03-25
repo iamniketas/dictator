@@ -2,11 +2,10 @@
 // AUTO-GENERATED: Do not edit manually. Delegate changes via orchestrator.
 // SOURCE: http://localhost:8000/task/task_036bea4a178e/report
 
-
 use anyhow::Result;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
-use tracing::{info, error, debug};
+use tracing::{debug, error, info};
 
 /// Ollama API request
 #[derive(Serialize)]
@@ -75,15 +74,10 @@ impl OllamaClient {
         debug!("Ollama request URL: {}", url);
         debug!("Ollama request model: {}", self.model);
 
-        let response = self
-            .client
-            .post(&url)
-            .json(&request)
-            .send()
-            .map_err(|e| {
-                error!("Failed to send request to Ollama: {}", e);
-                anyhow::anyhow!("Ollama request failed: {}", e)
-            })?;
+        let response = self.client.post(&url).json(&request).send().map_err(|e| {
+            error!("Failed to send request to Ollama: {}", e);
+            anyhow::anyhow!("Ollama request failed: {}", e)
+        })?;
 
         let status = response.status();
         debug!("Ollama response status: {}", status);
@@ -91,7 +85,11 @@ impl OllamaClient {
         if !status.is_success() {
             let error_text = response.text().unwrap_or_default();
             error!("Ollama returned error status {}: {}", status, error_text);
-            return Err(anyhow::anyhow!("Ollama API error: {} - {}", status, error_text));
+            return Err(anyhow::anyhow!(
+                "Ollama API error: {} - {}",
+                status,
+                error_text
+            ));
         }
 
         let ollama_response: OllamaResponse = response.json().map_err(|e| {
@@ -100,7 +98,11 @@ impl OllamaClient {
         })?;
 
         let corrected = ollama_response.response.trim().to_string();
-        info!("Text corrected: {} chars -> {} chars", raw_text.len(), corrected.len());
+        info!(
+            "Text corrected: {} chars -> {} chars",
+            raw_text.len(),
+            corrected.len()
+        );
         debug!("Corrected text: {}", corrected);
 
         Ok(corrected)
@@ -109,13 +111,21 @@ impl OllamaClient {
     /// Check if Ollama server is available
     pub fn health_check(&self) -> bool {
         let url = format!("{}/api/tags", self.base_url);
-        match self.client.get(&url).timeout(std::time::Duration::from_secs(5)).send() {
+        match self
+            .client
+            .get(&url)
+            .timeout(std::time::Duration::from_secs(5))
+            .send()
+        {
             Ok(response) => {
                 let available = response.status().is_success();
                 if available {
                     debug!("Ollama health check passed");
                 } else {
-                    error!("Ollama health check failed with status: {}", response.status());
+                    error!(
+                        "Ollama health check failed with status: {}",
+                        response.status()
+                    );
                 }
                 available
             }

@@ -11,9 +11,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter("info")
-        .init();
+    tracing_subscriber::fmt().with_env_filter("info").init();
 
     println!("=== Dictator Benchmark: Streaming vs Full ===\n");
 
@@ -58,9 +56,19 @@ fn main() -> anyhow::Result<()> {
     let streaming_total = hotkey_time.elapsed();
 
     println!("\n📊 STREAMING RESULTS:");
-    println!("  Total recording time: {:.1}s", streaming_start.elapsed().as_secs_f32());
-    println!("  Time from hotkey to ready: {:.1}s", streaming_total.as_secs_f32());
-    println!("  Audio samples: {} ({:.1}s at 16kHz)", _audio_data.len(), _audio_data.len() as f32 / 16000.0);
+    println!(
+        "  Total recording time: {:.1}s",
+        streaming_start.elapsed().as_secs_f32()
+    );
+    println!(
+        "  Time from hotkey to ready: {:.1}s",
+        streaming_total.as_secs_f32()
+    );
+    println!(
+        "  Audio samples: {} ({:.1}s at 16kHz)",
+        _audio_data.len(),
+        _audio_data.len() as f32 / 16000.0
+    );
 
     // === TEST 2: Full transcription mode ===
     println!("\n\nTEST 2: Full transcription mode");
@@ -93,14 +101,27 @@ fn main() -> anyhow::Result<()> {
             let full_total = hotkey_time2.elapsed();
 
             println!("\n📊 FULL TRANSCRIPTION RESULTS:");
-            println!("  Total recording time: {:.1}s", full_start.elapsed().as_secs_f32());
-            println!("  Time from hotkey to ready: {:.1}s", full_total.as_secs_f32());
-            println!("  Audio samples: {} ({:.1}s at 16kHz)", audio_data_full.len(), audio_data_full.len() as f32 / 16000.0);
+            println!(
+                "  Total recording time: {:.1}s",
+                full_start.elapsed().as_secs_f32()
+            );
+            println!(
+                "  Time from hotkey to ready: {:.1}s",
+                full_total.as_secs_f32()
+            );
+            println!(
+                "  Audio samples: {} ({:.1}s at 16kHz)",
+                audio_data_full.len(),
+                audio_data_full.len() as f32 / 16000.0
+            );
             println!("  Transcribed text length: {} chars", text.len());
 
             // Summary
             println!("\n\n=== SUMMARY ===");
-            println!("Streaming time:       {:.1}s", streaming_total.as_secs_f32());
+            println!(
+                "Streaming time:       {:.1}s",
+                streaming_total.as_secs_f32()
+            );
             println!("Full transcribe time: {:.1}s", full_total.as_secs_f32());
 
             if streaming_total < full_total {

@@ -1,6 +1,7 @@
 //! Configuration module for Dictator
 
 use anyhow::Result;
+use hardware_profiler::default_audio_models_dir;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
@@ -20,6 +21,14 @@ pub struct Config {
     pub injection: InjectionConfig,
     #[serde(default)]
     pub memory: MemoryConfig,
+    #[serde(default)]
+    pub runtime: RuntimeConfig,
+    #[serde(default)]
+    pub ui: UiConfig,
+    #[serde(default)]
+    pub storage: StorageConfig,
+    #[serde(default)]
+    pub corrections: CorrectionsConfig,
 }
 
 /// Memory management configuration
@@ -38,6 +47,123 @@ impl Default for MemoryConfig {
     fn default() -> Self {
         Self {
             idle_unload_minutes: default_idle_unload_minutes(),
+        }
+    }
+}
+/// Runtime recommendation preference for adaptive policy.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimePreference {
+    #[default]
+    #[serde(alias = "embedded_whisper_rs")]
+    Auto,
+    ForceGpu,
+    ForceCpu,
+}
+
+impl RuntimePreference {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            RuntimePreference::Auto => "auto",
+            RuntimePreference::ForceGpu => "force_gpu",
+            RuntimePreference::ForceCpu => "force_cpu",
+        }
+    }
+}
+
+/// Runtime policy configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RuntimeConfig {
+    #[serde(default)]
+    pub preference: RuntimePreference,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UiConfig {
+    #[serde(default = "default_true")]
+    pub show_post_transcription_overlay: bool,
+    #[serde(default = "default_overlay_result_seconds")]
+    pub post_transcription_overlay_seconds: u32,
+}
+
+fn default_overlay_result_seconds() -> u32 {
+    3
+}
+
+impl Default for UiConfig {
+    fn default() -> Self {
+        Self {
+            show_post_transcription_overlay: default_true(),
+            post_transcription_overlay_seconds: default_overlay_result_seconds(),
+        }
+    }
+}
+
+impl Default for RuntimeConfig {
+    fn default() -> Self {
+        Self {
+            preference: RuntimePreference::Auto,
+        }
+    }
+}
+
+/// Storage layout configuration used by history/recordings.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StorageConfig {
+    #[serde(default = "default_audio_history_dir")]
+    pub audio_history_dir: PathBuf,
+    #[serde(default = "default_transcripts_dir")]
+    pub transcripts_dir: PathBuf,
+}
+
+fn default_history_root_dir() -> PathBuf {
+    dirs::document_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("Dictator")
+        .join("History")
+}
+
+fn default_audio_history_dir() -> PathBuf {
+    default_history_root_dir().join("audio")
+}
+
+fn default_transcripts_dir() -> PathBuf {
+    default_history_root_dir().join("transcripts")
+}
+
+impl Default for StorageConfig {
+    fn default() -> Self {
+        Self {
+            audio_history_dir: default_audio_history_dir(),
+            transcripts_dir: default_transcripts_dir(),
+        }
+    }
+}
+
+/// Deterministic post-ASR corrections dictionary configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CorrectionsConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_true")]
+    pub auto_learn: bool,
+    #[serde(default = "default_auto_learn_min_repeats")]
+    pub min_auto_learn_repeats: u32,
+    #[serde(default)]
+    pub dictionary_path: Option<PathBuf>,
+}
+
+fn default_auto_learn_min_repeats() -> u32 {
+    3
+}
+
+impl Default for CorrectionsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_true(),
+            auto_learn: default_true(),
+            min_auto_learn_repeats: default_auto_learn_min_repeats(),
+            dictionary_path: None,
         }
     }
 }
@@ -105,6 +231,7 @@ pub enum WhisperBackend {
     /// Uses GGML .bin model files. No Python or external server required.
     /// GPU acceleration available via `--features cuda` at build time.
     #[default]
+    #[serde(alias = "embedded_whisper_rs")]
     Embedded,
     /// Legacy Python HTTP server (faster-whisper / CTranslate2 format).
     /// Requires `whisper_server.py` and Python environment.
@@ -130,23 +257,35 @@ impl WhisperConfig {
     ///
     /// Resolution order:
     /// 1. Explicit `[whisper] models_dir` in config
-    /// 2. `WHISPER_MODELS_DIR` environment variable
-    /// 3. Shared directory `%LocalAppData%\whisper-models\` (shared with Contora), if it exists
-    /// 4. Parent directory of `model_path`
+    /// 2. `AUDIO_MODELS_DIR` environment variable (new canonical override)
+    /// 3. `WHISPER_MODELS_DIR` environment variable (legacy override)
+    /// 4. Canonical shared path from runtime contract (`AudioModels`)
+    /// 5. Legacy `%LocalAppData%\whisper-models\` (migration fallback)
+    /// 6. Parent directory of `model_path`
     pub fn effective_models_dir(&self) -> Option<PathBuf> {
         if let Some(ref dir) = self.models_dir {
             return Some(dir.clone());
         }
+        if let Ok(env_dir) = std::env::var("AUDIO_MODELS_DIR") {
+            return Some(PathBuf::from(env_dir));
+        }
         if let Ok(env_dir) = std::env::var("WHISPER_MODELS_DIR") {
             return Some(PathBuf::from(env_dir));
         }
+
+        let canonical = default_audio_models_dir();
+        if canonical.exists() {
+            return Some(canonical);
+        }
+
         if let Some(local_app_data) = dirs::data_local_dir() {
-            let shared_dir = local_app_data.join("whisper-models");
-            if shared_dir.exists() {
-                return Some(shared_dir);
+            let legacy_dir = local_app_data.join("whisper-models");
+            if legacy_dir.exists() {
+                return Some(legacy_dir);
             }
         }
-        self.model_path.parent().map(|p| p.to_path_buf())
+
+        Some(canonical).or_else(|| self.model_path.parent().map(|p| p.to_path_buf()))
     }
 }
 
@@ -221,6 +360,10 @@ impl Default for Config {
             history: HistoryConfig::default(),
             injection: InjectionConfig::default(),
             memory: MemoryConfig::default(),
+            runtime: RuntimeConfig::default(),
+            ui: UiConfig::default(),
+            storage: StorageConfig::default(),
+            corrections: CorrectionsConfig::default(),
         }
     }
 }
@@ -245,14 +388,43 @@ impl Default for HistoryConfig {
 }
 
 impl Config {
-    /// Load configuration from file or create default
+    /// Load configuration from file or create default.
+    ///
+    /// Robustness rules:
+    /// - tolerate legacy backend values from previous builds;
+    /// - if parsing still fails, fall back to default config so app can boot.
     pub fn load() -> Result<Self> {
         let config_path = Self::config_path();
 
         if config_path.exists() {
             let content = fs::read_to_string(&config_path)?;
-            let config: Config = toml::from_str(&content)?;
-            Ok(config)
+            match toml::from_str::<Config>(&content) {
+                Ok(config) => {
+                    if content.contains("embedded_whisper_rs") {
+                        let migrated = content.replace("embedded_whisper_rs", "embedded");
+                        let _ = fs::write(&config_path, migrated);
+                    }
+                    Ok(config)
+                }
+                Err(primary_err) => {
+                    // Legacy compatibility: old builds persisted this backend name.
+                    let repaired = content.replace("embedded_whisper_rs", "embedded");
+                    if repaired != content {
+                        if let Ok(config) = toml::from_str::<Config>(&repaired) {
+                            let _ = fs::write(&config_path, &repaired);
+                            return Ok(config);
+                        }
+                    }
+
+                    eprintln!(
+                        "[CONFIG] parse failed for {:?}: {}. Falling back to default config.",
+                        config_path, primary_err
+                    );
+                    let config = Config::default();
+                    let _ = config.save();
+                    Ok(config)
+                }
+            }
         } else {
             let config = Config::default();
             config.save()?;
