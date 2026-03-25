@@ -40,33 +40,43 @@
 
 ---
 
-## Sprint B: macOS — MVP Foundation
+## Sprint B: macOS — MVP Foundation ✅ DONE (2026-03-25)
 
 **Goal:** Get macOS client to feature parity with Windows basic pipeline.
 
-### B1: Modularize main.swift
-- Split 60KB single file into proper Swift modules:
-  - `AudioCaptureService.swift`
-  - `TranscriptionService.swift`
-  - `HotkeyManager.swift`
-  - `TextInjectionService.swift`
-  - `OverlayView.swift`
-  - `SettingsStore.swift`
-  - `AppState.swift`
+### B1: Modularize main.swift ✅
+- Split monolithic 1400-line `main.swift` into proper Swift modules:
+  - `Models/AppModel.swift` — main state machine
+  - `Services/AudioCaptureService.swift`
+  - `Services/TranscriptionService.swift` — protocol + HTTP impl
+  - `Services/WhisperKitService.swift` — on-device WhisperKit impl
+  - `Services/HotkeyManager.swift` — CGEventTap + Carbon fallback
+  - `Services/TextInjectionService.swift`
+  - `Services/RecordingArchiveService.swift`
+  - `Services/SettingsStore.swift` — UserDefaults persistence
+  - `UI/AppDelegate.swift`, `UI/DashboardView.swift`, `UI/SettingsView.swift`
+  - `Extensions/DataExtensions.swift`
+  - `DictatorMacApp.swift` — SwiftUI App entry
 
-### B2: WhisperKit Integration
-- Replace HTTP server dependency with WhisperKit (CoreML/Metal/ANE)
-- Evaluate performance on M1/M2/M3
-- Keep HTTP fallback for older Macs without ANE
+### B2: WhisperKit Integration ✅
+- Added `WhisperKit` (0.17.0) to Package.swift dependencies
+- `WhisperKitTranscriptionService`: on-device CoreML/Metal/ANE transcription
+- Both backends implement `TranscriptionService` protocol
+- `AppModel` switches between backends without restart
+- Default backend: WhisperKit; HTTP server as fallback
 
-### B3: Text Injection Reliability
-- Pasteboard + CGEvent (Cmd+V) as primary method
-- Accessibility permission flow with onboarding guide
-- Fallback: clipboard-only mode
+### B3: Text Injection Reliability ✅
+- `TextInjectionService`: extracted from AppModel, standalone class
+- CGEvent Cmd+V (two taps) + AppleScript fallback
+- Retry at 140ms / 320ms / 620ms / 1s / 2s after activation
 
-### B4: Streaming Transcription
-- Chunk-based pipeline matching Windows behavior
-- Overlay/status panel for partial results
+### B4: Streaming Transcription ✅ (carried over from before, still working)
+- Chunk-based pipeline (3/8/15 s) preserved in refactor
+
+### Additional improvements in Sprint B:
+- **HotkeyManager**: CGEventTap-based global hotkey with smart mode (tap=toggle, hold≥300ms=PTT). Carbon API as Accessibility fallback.
+- **SettingsStore**: UserDefaults persistence for all settings (backend, language, model, endpoint, streaming, chunk size)
+- **SettingsView**: full redesign with tabbed UI — Transcription (backend picker, WhisperKit model selector + load/unload), Recording (streaming, hotkey info, permissions), About
 
 ---
 
@@ -225,19 +235,57 @@
 
 ---
 
+## Sprint N: macOS — MLX Backend + Model Catalog ✅ DONE (2026-03-25)
+
+**Commit:** `57feafb`
+
+### N1: MLX Transcription Backend ✅
+- `MLXTranscriptionService`: `POST /v1/audio/transcriptions` (OpenAI-compatible multipart)
+- Auto-reads Contora shared config from `~/Library/Application Support/NiketasAI/runtime/transcription-server.json`
+- `SharedRuntimePaths` + `SharedTranscriptionServerConfig` mirror Contora's path resolution
+- `AppModel.probeMlxServer()`: async `GET /v1/models` reachability check
+- `TranscriptionBackend` enum: `whisperkit | mlx | http`
+- Settings → Transcription: MLX section with live indicator, model picker, Check button
+- Endpoint URL + model ID stored in `UserDefaults`, auto-populated from Contora config on first launch
+
+### N2: WhisperKit Model Catalog Expansion ✅
+- 7 → 12 models: added `tiny.en`, `base.en`, `small.en`, `medium.en` (English-only, faster)
+- Added `distil-whisper/distil-large-v3 ⚡` (~2× faster than large-v3, minimal quality tradeoff)
+- Sorted smallest → largest
+
+### N3: MLX Recommended Model Presets ✅
+Four presets in Settings:
+- `mlx-community/whisper-large-v3-turbo-asr-fp16` ✦ — Contora default, best quality/speed
+- `mlx-community/distil-whisper-large-v3` — 2× faster
+- `mlx-community/whisper-large-v3-mlx-fp16` — maximum accuracy
+- `mlx-community/whisper-small-mlx-q4` — ultra-fast, older M1
+
+---
+
 ## Up Next
 
-### Sprint N: macOS — MVP Foundation (Sprint B)
-- Modularize `main.swift`, integrate WhisperKit
-- macOS development done on macOS machine directly
+### Sprint O: macOS — History View
+- SwiftUI window listing past transcriptions from `RecordingArchiveService` (WAV + JSON already saved)
+- Columns: timestamp, duration, transcript text preview
+- Actions: Copy Text, Play Audio, Delete
+- Accessible from tray menu: "History..."
 
-### Sprint O: Custom Dictionary Editor
-- GUI in Settings window for adding word substitutions
-- Written to a vocabulary file, passed to whisper on load
+### Sprint P: macOS — Memory Auto-Unload + Permission Re-Check
+- WhisperKit idle unload timer (configurable: 0/5/10/30 min), mirrors Windows `C2`
+- Persist ticker window position in `UserDefaults` on `windowDidMove`
+- Accessibility permission re-check: subscribe to `NSWorkspace` app-switch notifications
 
-### Sprint P: Command Mode (Research)
+### Sprint Q: macOS — Injection Method Choice
+- Settings → "After transcription": Clipboard + Cmd+V (current) / Clipboard only / Clipboard + Enter
+- `clipboard_enter` useful for messengers (auto-send)
+
+### Sprint R: Custom Dictionary Editor (cross-platform)
+- macOS: SwiftUI editor for custom word substitutions passed to WhisperKit initial prompt
+- Windows: extend existing Settings window
+
+### Sprint S: Command Mode (Research)
 - Capture selected text + voice command → LLM rewrite → inject result
-- Investigate accessibility API for selected text capture on Windows
+- Investigate Accessibility API for selected-text capture on both platforms
 
 ---
 
@@ -256,7 +304,10 @@
 11. **Sprint K** ✅ DONE
 12. **Sprint L** ✅ DONE
 13. **Sprint M** ✅ DONE
-14. **Sprint B1-B4** (macOS) — macOS machine only
-15. **Sprint D1-D2** (model research) — informs future architecture
-16. **Sprint O** (dictionary editor)
-17. **Sprint P** (command mode)
+14. **Sprint B** ✅ DONE (macOS MVP)
+15. **Sprint N** ✅ DONE (macOS MLX + model catalog)
+16. **Sprint O** — macOS History View ← next
+17. **Sprint P** — macOS Memory Unload + Permission Re-Check
+18. **Sprint Q** — macOS Injection Method Choice
+19. **Sprint R** — Custom Dictionary Editor
+20. **Sprint S** — Command Mode (research)
