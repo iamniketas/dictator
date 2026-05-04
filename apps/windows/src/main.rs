@@ -1711,7 +1711,7 @@ fn main() -> Result<()> {
         let waveform_stop = Arc::new(AtomicBool::new(false));
         let mut avg_transcribe_ratio: f32 = 0.20;
         let mut whisper_ready = false;
-        let mut whisper_status_text = String::from("Whisper: idle");
+        let mut whisper_status_text = String::from("ASR server: idle");
         let mut last_transcription_time: Option<Instant> = None;
         let idle_unload_minutes = config_clone.memory.idle_unload_minutes;
         let mut live_backend = config_clone.whisper.backend.clone();
@@ -1721,6 +1721,14 @@ fn main() -> Result<()> {
         let policy_enable_cloud_fallback = policy_enable_cloud_fallback_clone;
         let last_policy_stage = last_policy_stage_clone;
         let runtime_preference_state = runtime_preference_state_clone;
+        let mut live_model_path_cache = config_clone.whisper.model_path.clone();
+        let mut live_pref_cache = config_clone.runtime.preference.clone();
+        let mut last_live_cfg_reload = Instant::now()
+            .checked_sub(Duration::from_secs(1))
+            .unwrap_or_else(Instant::now);
+        let mut last_server_start_attempt = Instant::now()
+            .checked_sub(Duration::from_secs(10))
+            .unwrap_or_else(Instant::now);
         let mut whisper_manager = WhisperServerManager::new(
             config_clone
                 .whisper
@@ -1733,20 +1741,32 @@ fn main() -> Result<()> {
         info!("[MAIN] Event handler thread started, waiting for hotkey events...");
 
         loop {
-            if let Ok(live_cfg) = Config::load() {
-                live_backend = live_cfg.whisper.backend.clone();
-                ui::set_streaming_enabled(live_cfg.streaming.enabled);
-                ui::set_streaming_chunk_seconds(live_cfg.streaming.poll_interval);
-                ui::set_ollama_enabled(live_cfg.ollama.enabled);
-                if let Ok(mut pref_guard) = runtime_preference_state.write() {
-                    *pref_guard = live_cfg.runtime.preference.clone();
+            if last_live_cfg_reload.elapsed() >= Duration::from_millis(500) {
+                last_live_cfg_reload = Instant::now();
+                if let Ok(live_cfg) = Config::load() {
+                    live_backend = live_cfg.whisper.backend.clone();
+                    ui::set_streaming_enabled(live_cfg.streaming.enabled);
+                    ui::set_streaming_chunk_seconds(live_cfg.streaming.poll_interval);
+                    ui::set_ollama_enabled(live_cfg.ollama.enabled);
+
+                    if live_pref_cache != live_cfg.runtime.preference {
+                        live_pref_cache = live_cfg.runtime.preference.clone();
+                        if let Ok(mut pref_guard) = runtime_preference_state.write() {
+                            *pref_guard = live_cfg.runtime.preference.clone();
+                        }
+                        whisper_manager
+                            .set_preferred_device(server_device_hint(&live_cfg.runtime.preference));
+                    }
+
+                    let live_model_path = live_cfg.whisper.model_path;
+                    if live_model_path_cache != live_model_path {
+                        live_model_path_cache = live_model_path.clone();
+                        if let Ok(mut active_guard) = active_model_path_clone.write() {
+                            *active_guard = live_model_path.clone();
+                        }
+                        whisper_manager.set_model_path(live_model_path.to_string_lossy().to_string());
+                    }
                 }
-                let live_model_path = live_cfg.whisper.model_path;
-                if let Ok(mut active_guard) = active_model_path_clone.write() {
-                    *active_guard = live_model_path.clone();
-                }
-                whisper_manager.set_model_path(live_model_path.to_string_lossy().to_string());
-                whisper_manager.set_preferred_device(server_device_hint(&live_cfg.runtime.preference));
             }
             let is_embedded = live_backend == WhisperBackend::Embedded;
 
@@ -1757,6 +1777,30 @@ fn main() -> Result<()> {
                     Some(evt)
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {
+                    if !is_embedded && !whisper_ready {
+                        match whisper_manager.poll_ready() {
+                            Ok(true) => {
+                                whisper_ready = true;
+                                whisper_status_text = "ASR server: ready".to_string();
+                            }
+                            Ok(false) => {
+                                whisper_status_text = "ASR server: starting...".to_string();
+                                if !whisper_manager.is_server_running()
+                                    && last_server_start_attempt.elapsed()
+                                        >= Duration::from_secs(3)
+                                {
+                                    last_server_start_attempt = Instant::now();
+                                    if let Err(e) = whisper_manager.start_if_needed() {
+                                        warn!("[MAIN] ASR prewarm start failed: {}", e);
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                whisper_status_text = "ASR server: startup error".to_string();
+                                warn!("[MAIN] ASR prewarm poll failed: {}", e);
+                            }
+                        }
+                    }
                     if is_recording && let Some(started_at) = recording_started_at {
                         let elapsed = started_at.elapsed();
                         let elapsed_sec = elapsed.as_secs();
@@ -1766,13 +1810,13 @@ fn main() -> Result<()> {
                                 match whisper_manager.poll_ready() {
                                     Ok(true) => {
                                         whisper_ready = true;
-                                        whisper_status_text = "Whisper: ready".to_string();
+                                        whisper_status_text = "ASR server: ready".to_string();
                                     }
                                     Ok(false) => {
-                                        whisper_status_text = "Whisper: starting...".to_string();
+                                        whisper_status_text = "ASR server: starting...".to_string();
                                     }
                                     Err(e) => {
-                                        whisper_status_text = "Whisper: startup error".to_string();
+                                        whisper_status_text = "ASR server: startup error".to_string();
                                         warn!("[MAIN] Whisper poll error: {}", e);
                                     }
                                 }
@@ -1786,16 +1830,18 @@ fn main() -> Result<()> {
                             }
                             let streaming_enabled = ui::is_streaming_enabled();
                             let chunk_seconds = ui::streaming_chunk_seconds();
-                            let mut status = format_recording_status(
+                            let status = format_recording_status(
                                 elapsed,
                                 streaming_enabled,
                                 chunk_seconds,
                                 &whisper_status_text,
                             );
-                            if elapsed_sec >= 30 {
-                                status.push_str("\nTip: tap hotkey again to stop");
-                            }
                             overlay_clone.update_status_text(&status);
+                            if elapsed_sec >= 30 && accumulated_text.trim().is_empty() {
+                                overlay_clone.update_body_text("Tip: tap hotkey again to stop");
+                            } else if elapsed_sec < 30 && accumulated_text.trim().is_empty() {
+                                overlay_clone.update_body_text("");
+                            }
                         }
                     }
                     // Idle unload: free model memory after N minutes of inactivity
@@ -1942,9 +1988,9 @@ fn main() -> Result<()> {
                         } else {
                             whisper_ready = WhisperServerManager::is_healthy();
                             if whisper_ready {
-                                whisper_status_text = "Whisper: ready".to_string();
+                                whisper_status_text = "ASR server: ready".to_string();
                             } else {
-                                whisper_status_text = "Whisper: starting...".to_string();
+                                whisper_status_text = "ASR server: starting...".to_string();
                                 if let Err(e) = whisper_manager.start_if_needed() {
                                     warn!("[MAIN] Whisper server warmup start failed: {}", e);
                                     if let Some(new_model_path) = try_switch_to_next_fallback_model(
@@ -1967,7 +2013,7 @@ fn main() -> Result<()> {
                                                 .to_string()
                                         };
                                     } else {
-                                        whisper_status_text = "Whisper: startup error".to_string();
+                                        whisper_status_text = "ASR server: startup error".to_string();
                                     }
                                 }
                             }
@@ -2038,7 +2084,7 @@ fn main() -> Result<()> {
                     recording_started_at = None;
                     last_recording_second = u64::MAX;
                     whisper_ready = false;
-                    whisper_status_text = "Whisper: idle".to_string();
+                    whisper_status_text = "ASR server: idle".to_string();
 
                     // Stop waveform thread
                     waveform_stop.store(true, Ordering::SeqCst);
@@ -2228,7 +2274,7 @@ fn main() -> Result<()> {
                                     policy_retry_count = policy_retry_count.saturating_add(1);
                                     force_embedded_this_run = true;
                                 } else {
-                                    overlay_clone.show("Whisper server startup error");
+                                    overlay_clone.show("ASR server startup error");
                                     std::thread::sleep(Duration::from_secs(2));
                                     overlay_clone.hide();
                                     save_failed_audio("server startup error", "server_start_failed");

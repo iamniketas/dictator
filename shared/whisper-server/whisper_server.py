@@ -9,6 +9,8 @@ Supports two execution backends:
 import os
 import sys
 import tempfile
+import tarfile
+import shutil
 from pathlib import Path
 from flask import Flask, request, jsonify
 import logging
@@ -16,6 +18,26 @@ import logging
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+def _configure_temp_dir():
+    candidates = [
+        os.getenv("NEMO_CACHE_DIR"),
+        os.getenv("TEMP"),
+        os.getenv("TMP"),
+    ]
+    for raw in candidates:
+        if not raw:
+            continue
+        try:
+            p = Path(raw).expanduser()
+            p.mkdir(parents=True, exist_ok=True)
+            tempfile.tempdir = str(p)
+            logger.info("Using temp directory: %s", p)
+            return
+        except Exception as e:
+            logger.warning("Failed to set temp directory '%s': %s", raw, e)
+
+_configure_temp_dir()
 
 app = Flask(__name__)
 app.config["JSON_AS_ASCII"] = False
@@ -27,7 +49,7 @@ except Exception:
 # Global model instance (loaded once)
 model = None
 model_info = {}
-model_runtime = "unknown"  # "faster_whisper" | "transformers_asr"
+model_runtime = "unknown"  # "faster_whisper" | "transformers_asr" | "nemo_asr"
 SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_LOCAL_MODEL_DIR = SCRIPT_DIR / "models" / "faster-whisper-large-v2"
 
@@ -56,6 +78,18 @@ def prefers_transformers_backend(model_path: str) -> bool:
         return True
     # For generic HF refs we also prefer transformers first.
     return is_hf_like_ref(model_path)
+
+
+def has_nemo_artifact(model_path: str) -> bool:
+    p = Path(model_path).expanduser()
+    if p.is_file() and p.suffix.lower() == ".nemo":
+        return True
+    if p.is_dir():
+        try:
+            return any(child.suffix.lower() == ".nemo" for child in p.iterdir() if child.is_file())
+        except Exception:
+            return False
+    return False
 
 
 def resolve_transformers_device(preferred_device: str | None):
@@ -161,17 +195,117 @@ def load_faster_whisper_model(model_path, preferred_device=None, preferred_compu
     raise RuntimeError(f"faster-whisper load failed: {last_error}")
 
 
+def resolve_nemo_file(model_path: str) -> Path:
+    p = Path(model_path).expanduser()
+    if p.is_file() and p.suffix.lower() == ".nemo":
+        return p
+    if p.is_dir():
+        files = [f for f in p.iterdir() if f.is_file() and f.suffix.lower() == ".nemo"]
+        if not files:
+            raise RuntimeError(f"No .nemo file found in {p}")
+        files.sort(key=lambda f: f.stat().st_size if f.exists() else 0, reverse=True)
+        return files[0]
+    raise RuntimeError(f"Invalid NeMo path: {model_path}")
+
+def _sanitize_tar_member_name(name: str) -> str:
+    normalized = name.replace("\\", "/")
+    while normalized.startswith("./") or normalized.startswith(".\\"):
+        normalized = normalized[2:]
+    return normalized.lstrip("/")
+
+def ensure_nemo_extracted(nemo_file: Path) -> Path:
+    base_temp = Path(tempfile.gettempdir()).expanduser()
+    extract_root = base_temp / "dictator-nemo"
+    model_dir = extract_root / nemo_file.stem
+    marker = model_dir / ".extracted.ok"
+    cfg = model_dir / "model_config.yaml"
+    ckpt = model_dir / "model_weights.ckpt"
+    if marker.exists() and cfg.exists() and ckpt.exists():
+        return model_dir
+
+    if model_dir.exists():
+        shutil.rmtree(model_dir, ignore_errors=True)
+    model_dir.mkdir(parents=True, exist_ok=True)
+
+    with tarfile.open(nemo_file, "r:*") as tf:
+        for member in tf.getmembers():
+            sanitized = _sanitize_tar_member_name(member.name)
+            if not sanitized or sanitized.endswith("/"):
+                continue
+            target = (model_dir / sanitized).resolve()
+            if not str(target).startswith(str(model_dir.resolve())):
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            extracted = tf.extractfile(member)
+            if extracted is None:
+                continue
+            with extracted, open(target, "wb") as out:
+                shutil.copyfileobj(extracted, out)
+
+    if not cfg.exists() or not ckpt.exists():
+        raise RuntimeError(f"NeMo archive extraction incomplete for {nemo_file}")
+    marker.write_text("ok", encoding="utf-8")
+    return model_dir
+
+
+def load_nemo_model(model_path, preferred_device=None):
+    global model, model_info, model_runtime
+
+    try:
+        import torch  # type: ignore
+        from nemo.collections.asr.models import ASRModel  # type: ignore
+        from nemo.core.connectors.save_restore_connector import SaveRestoreConnector  # type: ignore
+    except Exception as e:
+        raise RuntimeError(
+            "nemo backend requires nemo_toolkit[asr]. Install: pip install nemo_toolkit[asr]"
+        ) from e
+
+    nemo_file = resolve_nemo_file(model_path)
+    extracted_dir = ensure_nemo_extracted(nemo_file)
+    use_cuda = preferred_device in ("cuda", "auto", None) and torch.cuda.is_available()
+    device = "cuda" if use_cuda else "cpu"
+    logger.info("Loading NeMo ASR model '%s' on device=%s...", nemo_file, device)
+
+    connector = SaveRestoreConnector()
+    connector.model_extracted_dir = str(extracted_dir)
+    asr_model = ASRModel.restore_from(
+        restore_path=str(nemo_file),
+        map_location=device,
+        save_restore_connector=connector,
+    )
+    asr_model.eval()
+    if use_cuda:
+        asr_model = asr_model.cuda()
+    else:
+        asr_model = asr_model.cpu()
+
+    model = asr_model
+    model_runtime = "nemo_asr"
+    model_info = {
+        "path": str(nemo_file),
+        "extracted_dir": str(extracted_dir),
+        "runtime": model_runtime,
+        "device": device,
+        "status": "loaded",
+    }
+    logger.info("NeMo ASR model loaded successfully")
+    return True
+
+
 def load_model(model_path, preferred_device=None, preferred_compute_type=None):
     """Load model with runtime fallback order based on model ref."""
     global model_info
 
     runtime_hint = os.getenv("WHISPER_RUNTIME", "").strip().lower()
+    try_nemo_first = runtime_hint == "nemo" or (runtime_hint == "" and has_nemo_artifact(model_path))
     try_transformers_first = runtime_hint == "transformers" or (
         runtime_hint == "" and prefers_transformers_backend(model_path)
     )
 
     loaders = []
-    if try_transformers_first:
+    if try_nemo_first:
+        loaders = ["nemo", "transformers", "faster_whisper"]
+    elif try_transformers_first:
         loaders = ["transformers", "faster_whisper"]
     else:
         loaders = ["faster_whisper", "transformers"]
@@ -181,6 +315,9 @@ def load_model(model_path, preferred_device=None, preferred_compute_type=None):
         try:
             if loader == "transformers":
                 if load_transformers_model(model_path, preferred_device=preferred_device):
+                    return True
+            elif loader == "nemo":
+                if load_nemo_model(model_path, preferred_device=preferred_device):
                     return True
             else:
                 if load_faster_whisper_model(
@@ -242,6 +379,8 @@ def validate_local_model_path(model_path: str):
         if runtime_hint == "transformers":
             # Explicit runtime override: allow transformers snapshots without model.bin.
             return None
+        if runtime_hint == "nemo" and has_nemo_artifact(str(path_obj)):
+            return None
         # transformers snapshots (Parakeet/Canary/Granite and similar) do not have model.bin
         # and should be accepted when config/tokenizer artifacts are present.
         has_transformers_artifacts = (
@@ -301,6 +440,21 @@ def transcribe_with_transformers(temp_path: str, language: str):
     return text, language, None
 
 
+def transcribe_with_nemo(temp_path: str, language: str):
+    # NeMo API may return str or hypothesis objects depending on model class.
+    out = model.transcribe([temp_path], batch_size=1)
+    text = ""
+    if isinstance(out, list) and len(out) > 0:
+        first = out[0]
+        if isinstance(first, str):
+            text = first
+        else:
+            text = getattr(first, "text", str(first))
+    else:
+        text = str(out)
+    return text.strip(), language, None
+
+
 @app.route('/transcribe', methods=['POST'])
 def transcribe():
     if model is None:
@@ -321,6 +475,8 @@ def transcribe():
         logger.info("Transcribing audio in %s using %s...", language, model_runtime)
         if model_runtime == "transformers_asr":
             result, out_lang, duration = transcribe_with_transformers(temp_path, language)
+        elif model_runtime == "nemo_asr":
+            result, out_lang, duration = transcribe_with_nemo(temp_path, language)
         else:
             result, out_lang, duration = transcribe_with_faster_whisper(temp_path, language)
 

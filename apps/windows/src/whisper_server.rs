@@ -207,6 +207,12 @@ fn spawn_server_process(
         if let Some(runtime) = runtime_hint {
             cmd.env("WHISPER_RUNTIME", runtime);
         }
+        if let Some(temp_root) = runtime_temp_root() {
+            let _ = fs::create_dir_all(&temp_root);
+            cmd.env("TMP", &temp_root);
+            cmd.env("TEMP", &temp_root);
+            cmd.env("NEMO_CACHE_DIR", &temp_root);
+        }
 
         #[cfg(target_os = "windows")]
         {
@@ -281,12 +287,13 @@ struct RuntimeProfileMarker {
 
 fn resolve_runtime_profile_metadata(model_path: &str) -> (Option<PathBuf>, Option<String>) {
     let path = Path::new(model_path);
+    let fallback_hint = runtime_hint_for_model_ref(model_path);
     let model_id = path
         .file_name()
         .and_then(|v| v.to_str())
         .map(|s| s.to_string());
     let Some(model_id) = model_id else {
-        return (None, None);
+        return (None, fallback_hint);
     };
 
     let profiles_dir = hardware_profiler::default_audio_models_dir()
@@ -295,11 +302,11 @@ fn resolve_runtime_profile_metadata(model_path: &str) -> (Option<PathBuf>, Optio
     let marker_path = profiles_dir.join(format!("{}.json", model_id));
     let raw = match fs::read_to_string(marker_path) {
         Ok(v) => v,
-        Err(_) => return (None, None),
+        Err(_) => return (None, fallback_hint),
     };
     let marker = match serde_json::from_str::<RuntimeProfileMarker>(&raw) {
         Ok(v) => v,
-        Err(_) => return (None, None),
+        Err(_) => return (None, fallback_hint),
     };
 
     let mut python = None;
@@ -324,17 +331,8 @@ fn resolve_runtime_profile_metadata(model_path: &str) -> (Option<PathBuf>, Optio
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())
-        .and_then(|model_ref| {
-            let lower = model_ref.to_ascii_lowercase();
-            if lower.starts_with("nvidia/parakeet")
-                || lower.starts_with("nvidia/canary")
-                || lower.starts_with("ibm-granite/")
-            {
-                Some(String::from("transformers"))
-            } else {
-                None
-            }
-        });
+        .and_then(runtime_hint_for_model_ref)
+        .or(fallback_hint);
 
     (python, runtime_hint)
 }
@@ -343,4 +341,25 @@ fn resolve_whisper_server_log_file() -> Option<PathBuf> {
     let log_dir = dirs::data_dir()?.join("dictator").join("logs");
     let _ = fs::create_dir_all(&log_dir);
     Some(log_dir.join("whisper-server.log"))
+}
+
+fn runtime_temp_root() -> Option<PathBuf> {
+    if let Some(roaming) = dirs::data_dir() {
+        return Some(roaming.join("dictator").join("tmp"));
+    }
+    Some(std::env::temp_dir().join("dictator-temp"))
+}
+
+fn runtime_hint_for_model_ref(model_ref: &str) -> Option<String> {
+    let lower = model_ref.to_ascii_lowercase();
+    if lower.starts_with("nvidia/parakeet") || lower.contains("parakeet-tdt") {
+        Some(String::from("nemo"))
+    } else if lower.starts_with("nvidia/canary")
+        || lower.starts_with("ibm-granite/")
+        || lower.contains("granite-speech")
+    {
+        Some(String::from("transformers"))
+    } else {
+        None
+    }
 }

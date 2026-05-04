@@ -1060,10 +1060,57 @@ public sealed partial class MainWindow : Window
 
         model.DownloadProgress = 45;
         model.DownloadStatusText = "Installing torch runtime...";
-        var torchIndex = hasNvidia
-            ? "https://download.pytorch.org/whl/cu121"
-            : "https://download.pytorch.org/whl/cpu";
-        await RunProcessCheckedAsync(venvPython, $"-m pip install torch --index-url {torchIndex}", runtimeRoot);
+        if (hasNvidia)
+        {
+            Exception? torchInstallError = null;
+            var torchCommands = new[]
+            {
+                "-m pip install --upgrade torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu126",
+                "-m pip install --upgrade --pre torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu128",
+                "-m pip install --upgrade torch --index-url https://download.pytorch.org/whl/cu121",
+            };
+
+            var torchInstalled = false;
+            foreach (var cmd in torchCommands)
+            {
+                try
+                {
+                    await RunProcessCheckedAsync(venvPython, cmd, runtimeRoot);
+                    torchInstalled = true;
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    torchInstallError = ex;
+                }
+            }
+
+            if (!torchInstalled && torchInstallError != null)
+            {
+                throw new InvalidOperationException($"Failed to install CUDA torch runtime: {torchInstallError.Message}");
+            }
+        }
+        else
+        {
+            await RunProcessCheckedAsync(venvPython, "-m pip install --upgrade torch --index-url https://download.pytorch.org/whl/cpu", runtimeRoot);
+        }
+
+        var cudaProbe = await RunProcessCaptureAsync(
+            venvPython,
+            "-c \"import torch; print(1 if torch.cuda.is_available() else 0)\"",
+            runtimeRoot);
+        var cudaReady = cudaProbe.ExitCode == 0 && cudaProbe.StdOut.Trim().EndsWith("1", StringComparison.Ordinal);
+        if (hasNvidia && !cudaReady)
+        {
+            model.DownloadStatusText = "CUDA torch unavailable for current runtime Python; using CPU fallback.";
+        }
+
+        if (model.ExecutionModelRef.Contains("parakeet", StringComparison.OrdinalIgnoreCase))
+        {
+            model.DownloadProgress = 56;
+            model.DownloadStatusText = "Installing NeMo runtime...";
+            await RunProcessCheckedAsync(venvPython, "-m pip install nemo_toolkit[asr]", runtimeRoot);
+        }
 
         model.DownloadProgress = 62;
         model.DownloadStatusText = "Downloading model weights...";
@@ -1119,6 +1166,16 @@ public sealed partial class MainWindow : Window
 
     private static async Task RunProcessCheckedAsync(string fileName, string arguments, string workingDirectory)
     {
+        var result = await RunProcessCaptureAsync(fileName, arguments, workingDirectory);
+        if (result.ExitCode != 0)
+        {
+            var details = string.IsNullOrWhiteSpace(result.StdErr) ? result.StdOut : result.StdErr;
+            throw new InvalidOperationException($"Process failed ({fileName} {arguments}): {details}");
+        }
+    }
+
+    private static async Task<ProcessResult> RunProcessCaptureAsync(string fileName, string arguments, string workingDirectory)
+    {
         var start = new ProcessStartInfo
         {
             FileName = fileName,
@@ -1135,13 +1192,10 @@ public sealed partial class MainWindow : Window
         var stdOut = await proc.StandardOutput.ReadToEndAsync();
         var stdErr = await proc.StandardError.ReadToEndAsync();
         await proc.WaitForExitAsync();
-
-        if (proc.ExitCode != 0)
-        {
-            var details = string.IsNullOrWhiteSpace(stdErr) ? stdOut : stdErr;
-            throw new InvalidOperationException($"Process failed ({fileName} {arguments}): {details}");
-        }
+        return new ProcessResult(proc.ExitCode, stdOut, stdErr);
     }
+
+    private readonly record struct ProcessResult(int ExitCode, string StdOut, string StdErr);
     private void OnRuntimeChanged(object sender, SelectionChangedEventArgs e)
     {
         if (!_uiReady) return;
