@@ -1,5 +1,4 @@
 import AVFoundation
-import Foundation
 
 enum AudioCaptureError: LocalizedError {
     case alreadyRunning
@@ -7,10 +6,8 @@ enum AudioCaptureError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .alreadyRunning:
-            return "Recording is already running"
-        case .notRunning:
-            return "Recording is not running"
+        case .alreadyRunning: return "Recording is already running."
+        case .notRunning:     return "Recording is not running."
         }
     }
 }
@@ -27,22 +24,27 @@ final class AudioCaptureService {
 
     private var nativeMonoSamples: [Float] = []
     private var nativeSampleRate: Double = 16_000
-    private var latestRMS: Double = 0
-    private var smoothedBars: [Double] = []
     private var isRunning = false
     private var startTime: Date?
+
+    /// RMS amplitude of the most recently captured audio buffer (0…1).
+    /// Thread-safe: updated under `lock`, safe to read from any thread.
+    private var _currentRMS: Float = 0
+    var currentRMS: Float {
+        lock.lock()
+        defer { lock.unlock() }
+        return _currentRMS
+    }
+
+    // MARK: - Public API
 
     func startCapture() throws {
         lock.lock()
         defer { lock.unlock() }
 
-        guard !isRunning else {
-            throw AudioCaptureError.alreadyRunning
-        }
+        guard !isRunning else { throw AudioCaptureError.alreadyRunning }
 
         nativeMonoSamples.removeAll(keepingCapacity: true)
-        latestRMS = 0
-        smoothedBars.removeAll(keepingCapacity: true)
 
         let input = engine.inputNode
         let format = input.inputFormat(forBus: 0)
@@ -64,9 +66,7 @@ final class AudioCaptureService {
         lock.lock()
         defer { lock.unlock() }
 
-        guard isRunning else {
-            throw AudioCaptureError.notRunning
-        }
+        guard isRunning else { throw AudioCaptureError.notRunning }
 
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
@@ -75,13 +75,11 @@ final class AudioCaptureService {
         let native = nativeMonoSamples
         let sampleRate = nativeSampleRate
         nativeMonoSamples.removeAll(keepingCapacity: true)
-        latestRMS = 0
-        smoothedBars.removeAll(keepingCapacity: true)
+        startTime = nil
 
         let downsampled = Self.resampleTo16k(samples: native, nativeSampleRate: sampleRate)
         let duration = Double(downsampled.count) / 16_000.0
 
-        startTime = nil
         return AudioCaptureResult(
             samples16kMono: downsampled,
             durationSeconds: duration,
@@ -92,132 +90,57 @@ final class AudioCaptureService {
     func elapsedSeconds() -> Double {
         lock.lock()
         defer { lock.unlock() }
-        guard isRunning, let startTime else {
-            return 0
-        }
+        guard isRunning, let startTime else { return 0 }
         return Date().timeIntervalSince(startTime)
     }
 
+    /// Snapshot of unprocessed native samples starting from `startIndex`.
     func snapshotNativeMono(from startIndex: Int) -> (samples: [Float], nextIndex: Int, sampleRate: Double) {
         lock.lock()
         let safeStart = min(max(0, startIndex), nativeMonoSamples.count)
-        let slice = Array(nativeMonoSamples[safeStart..<nativeMonoSamples.count])
+        let slice = Array(nativeMonoSamples[safeStart...])
         let nextIndex = nativeMonoSamples.count
         let sampleRate = nativeSampleRate
         lock.unlock()
         return (slice, nextIndex, sampleRate)
     }
 
-    func currentInputLevel() -> Double {
-        lock.lock()
-        let level = latestRMS
-        lock.unlock()
-        return level
-    }
-
-    func currentWaveformBars(count: Int) -> [Double] {
-        lock.lock()
-        let totalCount = nativeMonoSamples.count
-        let tailWindow = min(totalCount, 4096)
-        let tailStart = totalCount - tailWindow
-        let tail = tailWindow > 0 ? Array(nativeMonoSamples[tailStart..<totalCount]) : []
-        let previous = smoothedBars
-        lock.unlock()
-
-        guard count > 0 else { return [] }
-        guard !tail.isEmpty else {
-            let zeros = Array(repeating: 0.0, count: count)
-            lock.lock()
-            smoothedBars = zeros
-            lock.unlock()
-            return zeros
-        }
-
-        let samplesPerBar = max(1, tail.count / count)
-        var bars = Array(repeating: 0.0, count: count)
-        let noiseFloor = 0.0035
-        let loudSpeechRMS = 0.055
-
-        for bar in 0..<count {
-            let lo = bar * samplesPerBar
-            let hi = min(tail.count, lo + samplesPerBar)
-            if lo >= hi {
-                continue
-            }
-            var sumSquares = 0.0
-            for i in lo..<hi {
-                let v = Double(tail[i])
-                sumSquares += v * v
-            }
-            let rms = sqrt(sumSquares / Double(hi - lo))
-            let normalized = (rms - noiseFloor) / max(0.0001, (loudSpeechRMS - noiseFloor))
-            let clamped = min(max(normalized, 0), 1)
-            bars[bar] = pow(clamped, 0.58)
-        }
-
-        var smoothed = Array(repeating: 0.0, count: count)
-        for i in 0..<count {
-            let old = i < previous.count ? previous[i] : 0
-            let target = bars[i]
-            let alpha = target >= old ? 0.74 : 0.36
-            smoothed[i] = old + ((target - old) * alpha)
-        }
-
-        lock.lock()
-        smoothedBars = smoothed
-        lock.unlock()
-        return smoothed
-    }
+    // MARK: - Internal
 
     private func appendNativeMonoSamples(buffer: AVAudioPCMBuffer) {
-        guard let data = buffer.floatChannelData else {
-            return
-        }
-
+        guard let data = buffer.floatChannelData else { return }
         let channels = Int(buffer.format.channelCount)
         let frames = Int(buffer.frameLength)
-
-        if frames == 0 || channels == 0 {
-            return
-        }
+        guard frames > 0, channels > 0 else { return }
 
         var mono = [Float](repeating: 0, count: frames)
-
         if channels == 1 {
-            let channel = data[0]
-            for i in 0..<frames {
-                mono[i] = channel[i]
-            }
+            let ch = data[0]
+            for i in 0..<frames { mono[i] = ch[i] }
         } else {
             for frame in 0..<frames {
                 var sum: Float = 0
-                for channel in 0..<channels {
-                    sum += data[channel][frame]
-                }
+                for ch in 0..<channels { sum += data[ch][frame] }
                 mono[frame] = sum / Float(channels)
             }
         }
 
+        // Compute RMS for this buffer so callers can poll live amplitude.
+        var sumSq: Float = 0
+        for s in mono { sumSq += s * s }
+        let rms = mono.isEmpty ? 0 : sqrtf(sumSq / Float(mono.count))
+
         lock.lock()
+        _currentRMS = rms
         nativeMonoSamples.append(contentsOf: mono)
-        if !mono.isEmpty {
-            let sumSquares = mono.reduce(0.0) { partial, sample in
-                partial + Double(sample * sample)
-            }
-            let rms = sqrt(sumSquares / Double(mono.count))
-            latestRMS = min(max(rms, 0), 1)
-        }
         lock.unlock()
     }
 
-    static func resampleTo16k(samples: [Float], nativeSampleRate: Double) -> [Float] {
-        guard !samples.isEmpty else {
-            return []
-        }
+    // MARK: - Resampling (linear interpolation)
 
-        if abs(nativeSampleRate - 16_000.0) < 0.01 {
-            return samples
-        }
+    static func resampleTo16k(samples: [Float], nativeSampleRate: Double) -> [Float] {
+        guard !samples.isEmpty else { return [] }
+        if abs(nativeSampleRate - 16_000.0) < 0.01 { return samples }
 
         let ratio = nativeSampleRate / 16_000.0
         let outCount = max(1, Int(Double(samples.count) / ratio))
@@ -227,16 +150,13 @@ final class AudioCaptureService {
         for outIndex in 0..<outCount {
             let srcPos = Double(outIndex) * ratio
             let srcIndex = Int(srcPos)
-
             if srcIndex + 1 < samples.count {
                 let frac = Float(srcPos - Double(srcIndex))
-                let value = samples[srcIndex] * (1 - frac) + samples[srcIndex + 1] * frac
-                output.append(value)
+                output.append(samples[srcIndex] * (1 - frac) + samples[srcIndex + 1] * frac)
             } else if srcIndex < samples.count {
                 output.append(samples[srcIndex])
             }
         }
-
         return output
     }
 }

@@ -1,162 +1,371 @@
-import AppKit
 import SwiftUI
 
 struct SettingsView: View {
     @ObservedObject var model: AppModel
+    @ObservedObject var whisperKit: WhisperKitTranscriptionService
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
-                GroupBox("General") {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Toggle("Open at Login", isOn: $model.launchAtLogin)
-                        Toggle("Enable Live Transcription by Default", isOn: $model.streamingEnabled)
+        TabView {
+            TranscriptionTab(model: model, whisperKit: whisperKit)
+                .tabItem { Label("Transcription", systemImage: "waveform") }
+
+            RecordingTab(model: model)
+                .tabItem { Label("Recording", systemImage: "mic") }
+
+            LLMTab(model: model)
+                .tabItem { Label("LLM", systemImage: "sparkles") }
+
+            AboutTab()
+                .tabItem { Label("About", systemImage: "info.circle") }
+        }
+        .padding(20)
+        .frame(width: 480)
+    }
+}
+
+// MARK: - Transcription tab
+
+private struct TranscriptionTab: View {
+    @ObservedObject var model: AppModel
+    @ObservedObject var whisperKit: WhisperKitTranscriptionService
+
+    var body: some View {
+        Form {
+            Section {
+                Picker("Backend", selection: $model.transcriptionBackend) {
+                    ForEach(TranscriptionBackend.allCases, id: \.self) { backend in
+                        Text(backend.displayName).tag(backend)
                     }
-                    .padding(.top, 4)
                 }
+                .pickerStyle(.radioGroup)
+            } header: {
+                Text("Transcription Backend")
+            }
 
-                GroupBox("Transcription") {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Picker("Engine", selection: $model.transcriptionBackendPreference) {
-                            ForEach(TranscriptionBackendPreference.allCases) { backend in
-                                Text(backend.title).tag(backend)
-                            }
-                        }
-                        Picker("Chunk Duration", selection: $model.chunkSeconds) {
-                            Text("3s").tag(3)
-                            Text("8s").tag(8)
-                            Text("15s").tag(15)
-                        }
-                        .pickerStyle(.segmented)
-                        TextField("HTTP fallback endpoint", text: $model.transcriptionEndpoint)
-                            .textFieldStyle(.roundedBorder)
-                        TextField("Language code (e.g. ru, en)", text: $model.transcriptionLanguage)
-                            .textFieldStyle(.roundedBorder)
-                        LabeledContent("Active engine") {
-                            Text(model.activeTranscriptionBackend)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    .padding(.top, 4)
+            switch model.transcriptionBackend {
+            case .whisperKit: whisperKitSection
+            case .mlx:        mlxSection
+            case .http:       httpSection
+            }
+
+            Section {
+                TextField("Language code (e.g. ru, en, de)", text: $model.transcriptionLanguage)
+                    .textFieldStyle(.roundedBorder)
+                Text("Use ISO 639-1 two-letter codes. Empty = auto-detect.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } header: {
+                Text("Language")
+            }
+        }
+        .formStyle(.grouped)
+    }
+
+    // MARK: - WhisperKit section
+
+    private var whisperKitSection: some View {
+        Section {
+            Picker("Model", selection: $model.whisperKitModelName) {
+                ForEach(WhisperKitModelInfo.available) { info in
+                    Text("\(info.displayName)  (~\(info.approxSizeMB) MB)")
+                        .tag(info.id)
                 }
+            }
 
-                GroupBox("Recordings Archive") {
-                    VStack(alignment: .leading, spacing: 10) {
-                        LabeledContent("Folder") {
-                            Text(model.recordingsDirectoryPath)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(2)
-                                .multilineTextAlignment(.trailing)
-                        }
-
-                        LabeledContent("Saved recordings") {
-                            Text("\(model.recordingsCount)")
-                                .foregroundStyle(.secondary)
-                        }
-
-                        LabeledContent("Archive size") {
-                            Text(formattedBytes(model.recordingsTotalBytes))
-                                .foregroundStyle(.secondary)
-                        }
-
-                        Picker("Auto cleanup", selection: $model.recordingRetentionPolicy) {
-                            ForEach(RecordingRetentionPolicy.allCases) { policy in
-                                Text(policy.title).tag(policy)
-                            }
-                        }
-
-                        HStack {
-                            Button("Open Folder") {
-                                model.openRecordingsFolder()
-                            }
-                            Button("Refresh") {
-                                model.refreshArchiveStats()
-                            }
-                        }
-                    }
-                    .padding(.top, 4)
-                }
-
-                GroupBox("Text Injection") {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Picker("Mode", selection: $model.textInjectionMode) {
-                            ForEach(TextInjectionMode.allCases) { mode in
-                                Text(mode.title).tag(mode)
-                            }
-                        }
-                        LabeledContent("Last action") {
-                            Text(model.lastInjectionStatus)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(2)
-                                .multilineTextAlignment(.trailing)
+            HStack {
+                Circle()
+                    .fill(loadStateColor)
+                    .frame(width: 8, height: 8)
+                Text(whisperKit.loadState.statusText)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                if whisperKit.loadState == .downloading || whisperKit.loadState == .loading {
+                    ProgressView()
+                        .controlSize(.small)
+                } else {
+                    Button("Load Model") {
+                        Task {
+                            await whisperKit.loadModel(model.whisperKitModelName)
                         }
                     }
-                    .padding(.top, 4)
+                    .disabled(isLoadDisabled)
                 }
+            }
 
-                GroupBox("Permissions Onboarding") {
-                    VStack(alignment: .leading, spacing: 10) {
-                        LabeledContent("Microphone") {
-                            Text(model.permissions.microphone.rawValue)
-                                .foregroundStyle(model.permissions.microphone == .granted ? .green : .secondary)
-                        }
-                        LabeledContent("Accessibility") {
-                            Text(model.permissions.accessibility.rawValue)
-                                .foregroundStyle(model.permissions.accessibility == .granted ? .green : .secondary)
-                        }
+            if case .ready = whisperKit.loadState {
+                Button("Unload from Memory", role: .destructive) {
+                    whisperKit.unload()
+                }
+            }
+        } header: {
+            Text("WhisperKit (on-device)")
+        } footer: {
+            Text("Models download once from HuggingFace to ~/Library/Application Support/huggingface/models/. large-v3-turbo is recommended for Russian.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
 
-                        HStack {
-                            Button("Request Microphone") {
-                                model.permissions.requestMicrophone()
-                            }
-                            Button("Request Accessibility") {
-                                model.permissions.requestAccessibilityPrompt()
-                            }
-                            Button("Refresh Status") {
-                                model.permissions.refresh()
-                            }
-                        }
+    private var loadStateColor: Color {
+        switch whisperKit.loadState {
+        case .ready:               return .green
+        case .downloading, .loading: return .orange
+        case .failed:              return .red
+        case .idle:                return .secondary
+        }
+    }
 
-                        HStack {
-                            Button("Open Accessibility Settings…") {
-                                openAccessibilitySettings()
-                            }
-                            Button("Open Microphone Settings…") {
-                                openMicrophoneSettings()
-                            }
-                        }
+    private var isLoadDisabled: Bool {
+        whisperKit.loadState == .loading || whisperKit.loadState == .downloading
+    }
+
+    // MARK: - MLX section
+
+    private var mlxSection: some View {
+        Section {
+            // Server status indicator
+            HStack {
+                Circle()
+                    .fill(mlxStatusColor)
+                    .frame(width: 8, height: 8)
+                Text(mlxStatusText)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("Check") { model.probeMlxServer() }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+            }
+            .onAppear { model.probeMlxServer() }
+
+            TextField("Endpoint URL", text: $model.mlxEndpointURL)
+                .textFieldStyle(.roundedBorder)
+
+            // Model picker: preset recommended models + current custom value
+            Picker("Model", selection: $model.mlxModelID) {
+                ForEach(MLXModelInfo.recommended) { info in
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(info.displayName)
+                        Text(info.note)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
                     }
-                    .padding(.top, 4)
+                    .tag(info.id)
                 }
+                if !MLXModelInfo.recommended.map(\.id).contains(model.mlxModelID) {
+                    Text(model.mlxModelID).tag(model.mlxModelID)
+                }
+            }
 
-                Text("Dictator stays minimal by default. The floating overlay appears only while recording or processing.")
-                    .font(.footnote)
+            // Allow typing a custom HuggingFace model ID
+            TextField("Custom model ID (HuggingFace)", text: $model.mlxModelID)
+                .textFieldStyle(.roundedBorder)
+                .font(.system(size: 12, design: .monospaced))
+
+        } header: {
+            Text("MLX Server (Contora / OpenAI API)")
+        } footer: {
+            Text("Requires Contora with MLX backend running. Config auto-loaded from ~/Library/Application Support/NiketasAI/runtime/transcription-server.json when available.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var mlxStatusColor: Color {
+        switch model.mlxServerReachable {
+        case .none:  return .secondary
+        case true:   return .green
+        case false:  return .red
+        }
+    }
+
+    private var mlxStatusText: String {
+        switch model.mlxServerReachable {
+        case .none:  return "Not checked"
+        case true:   return "Server reachable ✓"
+        case false:  return "Server not running"
+        }
+    }
+
+    // MARK: - HTTP section
+
+    private var httpSection: some View {
+        Section {
+            TextField("Endpoint URL", text: $model.httpEndpointURL)
+                .textFieldStyle(.roundedBorder)
+            Text("Legacy Python whisper-server. See shared/whisper-server/.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        } header: {
+            Text("HTTP Server (legacy)")
+        }
+    }
+}
+
+// MARK: - Recording tab
+
+private struct RecordingTab: View {
+    @ObservedObject var model: AppModel
+
+    var body: some View {
+        Form {
+            Section {
+                Toggle("Enable streaming mode", isOn: $model.streamingEnabled)
+                if model.streamingEnabled {
+                    Picker("Chunk size", selection: $model.chunkSeconds) {
+                        Text("3 s").tag(3)
+                        Text("8 s").tag(8)
+                        Text("15 s").tag(15)
+                    }
+                    .pickerStyle(.segmented)
+                }
+            } header: {
+                Text("Streaming")
+            } footer: {
+                Text("Streaming mode transcribes audio in chunks during recording for faster perceived latency.")
+                    .font(.caption)
                     .foregroundStyle(.secondary)
             }
-            .padding(20)
+
+            Section {
+                Text("Hotkey: Cmd+Shift+D or Ctrl+Shift+D")
+                    .foregroundStyle(.secondary)
+                Picker("Mode", selection: $model.hotkeyMode) {
+                    Text("Smart (tap = toggle, hold = PTT)").tag(HotkeyManager.TriggerMode.smart)
+                    Text("Toggle").tag(HotkeyManager.TriggerMode.toggle)
+                    Text("Push-to-Talk").tag(HotkeyManager.TriggerMode.ptt)
+                }
+                .pickerStyle(.radioGroup)
+                Text("Smart: tap < 300 ms = start/stop. Hold ≥ 300 ms = push-to-talk (stops on release).")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } header: {
+                Text("Hotkey")
+            }
+
+            Section {
+                PermissionsView(permissions: model.permissions)
+            } header: {
+                Text("Permissions")
+            }
         }
-        .frame(width: 560, height: 620)
-        .onAppear {
-            model.permissions.refresh()
-            model.refreshArchiveStats()
+        .formStyle(.grouped)
+    }
+}
+
+// MARK: - Permissions sub-view
+
+private struct PermissionsView: View {
+    @ObservedObject var permissions: PermissionState
+
+    var body: some View {
+        HStack {
+            permissionRow("Microphone", status: permissions.microphone)
+            Spacer()
+            if permissions.microphone != .granted {
+                Button("Request") { permissions.requestMicrophone() }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+            }
+        }
+        HStack {
+            permissionRow("Accessibility", status: permissions.accessibility)
+            Spacer()
+            if permissions.accessibility != .granted {
+                Button("Open System Settings") { permissions.requestAccessibilityPrompt() }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+            }
         }
     }
 
-    private func openAccessibilitySettings() {
-        guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") else {
-            return
+    private func permissionRow(_ name: String, status: PermissionStatus) -> some View {
+        HStack(spacing: 6) {
+            Circle()
+                .fill(status == .granted ? Color.green : status == .denied ? Color.red : Color.orange)
+                .frame(width: 8, height: 8)
+            Text("\(name): \(status.rawValue)")
         }
-        NSWorkspace.shared.open(url)
     }
+}
 
-    private func openMicrophoneSettings() {
-        guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone") else {
-            return
+// MARK: - LLM tab
+
+private struct LLMTab: View {
+    @ObservedObject var model: AppModel
+
+    var body: some View {
+        Form {
+            Section {
+                Toggle("Enable LLM grammar correction", isOn: $model.llmEnabled)
+            } header: {
+                Text("Ollama Post-Processing")
+            } footer: {
+                Text("When enabled, the raw transcript is sent to a local Ollama model for grammar and punctuation correction before being pasted. Requires Ollama running locally.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            if model.llmEnabled {
+                Section {
+                    TextField("Endpoint URL", text: $model.llmEndpointURL)
+                        .textFieldStyle(.roundedBorder)
+                    Text("Default: http://127.0.0.1:11434")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } header: {
+                    Text("Ollama Server")
+                }
+
+                Section {
+                    TextField("Model name", text: $model.llmModel)
+                        .textFieldStyle(.roundedBorder)
+                    Text("e.g. llama3, mistral, gemma3. Must be pulled in Ollama first.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } header: {
+                    Text("Model")
+                }
+
+                Section {
+                    TextEditor(text: $model.llmSystemPrompt)
+                        .font(.system(size: 12, design: .monospaced))
+                        .frame(minHeight: 80)
+                        .overlay(RoundedRectangle(cornerRadius: 4).stroke(.separator, lineWidth: 0.5))
+                    Button("Reset to default") {
+                        model.llmSystemPrompt = LLMService.defaultCorrectionPrompt
+                    }
+                    .buttonStyle(.borderless)
+                    .font(.caption)
+                } header: {
+                    Text("System Prompt")
+                } footer: {
+                    Text("The raw transcript is appended after this prompt.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
         }
-        NSWorkspace.shared.open(url)
+        .formStyle(.grouped)
     }
+}
 
-    private func formattedBytes(_ bytes: Int64) -> String {
-        ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+// MARK: - About tab
+
+private struct AboutTab: View {
+    var body: some View {
+        Form {
+            Section {
+                LabeledContent("Version", value: "macOS prototype")
+                LabeledContent("Source", value: "github.com/dictator")
+            }
+            Section {
+                Button("Open Recordings Folder") {
+                    if let url = try? RecordingArchiveService().recordingsDirectory() {
+                        NSWorkspace.shared.open(url)
+                    }
+                }
+            }
+        }
+        .formStyle(.grouped)
     }
 }
