@@ -14,7 +14,7 @@ use tracing::{error, info, warn};
 use dictator::audio::AudioRecorder;
 use dictator::config::{Config, RuntimePreference, WhisperBackend};
 use dictator::corrections::CorrectionsManager;
-use dictator::history::HistoryManager;
+use dictator::history::{HistoryManager, Recording};
 use dictator::input::{self, HotkeyEvent};
 use dictator::llm::OllamaClient;
 use dictator::model_downloader;
@@ -203,6 +203,25 @@ fn detect_transcript_degradation(text: &str) -> Option<String> {
         .filter(|t| !t.is_empty())
         .collect();
 
+    // Immediately-repeating phrase at the tail (partial decoder loop): the same
+    // 4..=30 token block emitted 3+ times back-to-back. The whole-tail ratios
+    // below only flag a full collapse — they miss a loop that occupies just the
+    // final fraction of an otherwise-varied transcript (the common large-v3
+    // case). This runs regardless of length and is precise: 3 identical blocks
+    // of >=4 real words in a row essentially never occur in natural speech.
+    let n = tokens.len();
+    for cycle in 4..=30usize {
+        if n < cycle * 3 {
+            break;
+        }
+        let a = &tokens[n - cycle..];
+        let b = &tokens[n - 2 * cycle..n - cycle];
+        let c = &tokens[n - 3 * cycle..n - 2 * cycle];
+        if a == b && b == c {
+            return Some(format!("tail_phrase_repeat cycle={}", cycle));
+        }
+    }
+
     if tokens.len() < 220 {
         return None;
     }
@@ -251,6 +270,60 @@ fn detect_transcript_degradation(text: &str) -> Option<String> {
     }
 
     None
+}
+
+/// Strip trailing "subtitle credit" hallucinations that whisper emits on
+/// silence/music at the very end of a recording (e.g. "Редактор субтитров ...",
+/// "Субтитры сделал ...", "Продолжение следует", "Amara.org"). Only short
+/// trailing sentences that match a known credit marker are removed, and only
+/// from the END — legitimate content earlier in the text is never touched.
+fn strip_trailing_hallucinations(text: &str) -> String {
+    const MARKERS: &[&str] = &[
+        "субтитр",
+        "редактор субтитров",
+        "корректор",
+        "продолжение следует",
+        "спасибо за просмотр",
+        "спасибо за внимание",
+        "подписывайтесь",
+        "ставьте лайк",
+        "amara.org",
+        "dimatorzok",
+        "субтитры сделал",
+        "субтитры подготов",
+        "субтитры создавал",
+    ];
+
+    let mut s = text.trim_end().to_string();
+    loop {
+        let cut = s
+            .rfind(['.', '!', '?', '\n'])
+            .map(|i| i + 1)
+            .unwrap_or(0);
+        let last = s[cut..].trim();
+
+        if last.is_empty() {
+            if cut == 0 {
+                break;
+            }
+            // Drop a dangling separator and keep scanning.
+            s.truncate(cut.saturating_sub(1));
+            s = s.trim_end().to_string();
+            continue;
+        }
+
+        let low = last.to_lowercase();
+        // Credits are short; cap the window so we never nibble real sentences.
+        let is_credit =
+            last.split_whitespace().count() <= 12 && MARKERS.iter().any(|m| low.contains(m));
+        if is_credit && cut > 0 {
+            s.truncate(cut);
+            s = s.trim_end().to_string();
+        } else {
+            break;
+        }
+    }
+    s
 }
 
 /// Compute a human-readable size label for a model directory (single-level scan).
@@ -1182,6 +1255,13 @@ fn main() -> Result<()> {
             "disabled"
         }
     );
+    if !cfg!(feature = "cuda") {
+        warn!(
+            "[BUILD] This binary was compiled WITHOUT CUDA: ALL transcription runs on CPU \
+             regardless of the 'Force GPU' setting. Rebuild with \
+             `cargo build --release --features cuda` to use the GPU."
+        );
+    }
     if file_logging_enabled {
         info!("Log file location: {:?}", log_file);
     } else {
@@ -2220,16 +2300,67 @@ fn main() -> Result<()> {
                     };
                     let mut policy_retry_count: u32 = 0;
                     let mut server_fallback_used = false;
+
+                    // Persist the captured audio to disk IMMEDIATELY, in parallel
+                    // with transcription. The WAV is written on a background thread
+                    // so it does not delay the transcription start, but it
+                    // guarantees the audio is recoverable even if transcription
+                    // hangs or the process is killed before producing text. The
+                    // transcript text is filled in afterwards via the same handle.
+                    let pending_recording: Option<Recording> = if config_clone.history.enabled {
+                        let duration_secs = audio_data.len() as f32 / 16000.0;
+                        let base_mode = if ui::is_streaming_enabled() {
+                            "streaming"
+                        } else {
+                            "full"
+                        };
+                        let pending_mode = format!("{}|pending", base_mode);
+                        match history.prepare_pending_recording(
+                            duration_secs,
+                            &pending_mode,
+                            &config_clone.whisper.language,
+                        ) {
+                            Ok(rec) => {
+                                let history_for_wav = history.clone();
+                                let audio_for_wav = audio_data.clone();
+                                let rec_for_wav = rec.clone();
+                                std::thread::spawn(move || {
+                                    if let Err(e) =
+                                        history_for_wav.write_audio(&rec_for_wav, &audio_for_wav)
+                                    {
+                                        error!("[MAIN] Failed to persist pending audio: {}", e);
+                                    }
+                                });
+                                Some(rec)
+                            }
+                            Err(e) => {
+                                error!("[MAIN] Failed to prepare pending recording: {}", e);
+                                None
+                            }
+                        }
+                    } else {
+                        None
+                    };
+
                     let save_failed_audio = |reason: &str, stage: &str| {
-                        if config_clone.history.enabled {
+                        if !config_clone.history.enabled {
+                            return;
+                        }
+                        let base_mode = if ui::is_streaming_enabled() {
+                            "streaming"
+                        } else {
+                            "full"
+                        };
+                        let mode = format!("{}|{}", base_mode, stage);
+                        let fail_text = format!("[Transcription failed] {}", reason);
+                        if let Some(ref rec) = pending_recording {
+                            // Audio is already on disk from the pending save — just
+                            // record the failure reason as the transcript.
+                            if let Err(err) = history.update_recording_text(rec, &fail_text, &mode) {
+                                error!("[MAIN] Failed to update failed recording: {}", err);
+                            }
+                        } else {
                             let duration_secs = audio_data.len() as f32 / 16000.0;
-                            let base_mode = if ui::is_streaming_enabled() {
-                                "streaming"
-                            } else {
-                                "full"
-                            };
-                            let mode = format!("{}|{}", base_mode, stage);
-                            let fail_text = format!("[Transcription failed] {}", reason);
                             if let Err(err) = history.save_recording(
                                 &audio_data,
                                 &fail_text,
@@ -2528,6 +2659,10 @@ fn main() -> Result<()> {
                     // Normalize whitespace: faster-whisper sometimes inserts double spaces
                     // between segments; split_whitespace + join gives clean single spaces.
                     raw_text = raw_text.split_whitespace().collect::<Vec<_>>().join(" ");
+                    // Remove trailing subtitle-credit hallucinations before the
+                    // degradation check, so the loop tail (if any) ends the text
+                    // and the quality guard can actually see it.
+                    raw_text = strip_trailing_hallucinations(&raw_text);
 
                     if raw_text.is_empty() {
                         info!("No text transcribed");
@@ -2588,6 +2723,7 @@ fn main() -> Result<()> {
                                         .split_whitespace()
                                         .collect::<Vec<_>>()
                                         .join(" ");
+                                    let safe_text = strip_trailing_hallucinations(&safe_text);
 
                                     if !safe_text.is_empty() {
                                         if let Some(safe_reason) =
@@ -2733,23 +2869,31 @@ fn main() -> Result<()> {
                     // Update last activity time for idle unload timer
                     last_transcription_time = Some(Instant::now());
 
-                    // Save recording to history (if enabled)
+                    // Save recording to history (if enabled). The audio was
+                    // already written to disk in parallel at capture time; here we
+                    // just fill in the final transcript text.
                     if config_clone.history.enabled {
-                        let duration_secs = audio_data.len() as f32 / 16000.0;
                         let base_mode = if ui::is_streaming_enabled() {
                             "streaming"
                         } else {
                             "full"
                         };
                         let mode = format!("{}|{}", base_mode, policy_stage);
-                        if let Err(e) = history.save_recording(
-                            &audio_data,
-                            &final_text,
-                            duration_secs,
-                            &mode,
-                            &config_clone.whisper.language,
-                        ) {
-                            error!("[MAIN] Failed to save recording to history: {}", e);
+                        if let Some(ref rec) = pending_recording {
+                            if let Err(e) = history.update_recording_text(rec, &final_text, &mode) {
+                                error!("[MAIN] Failed to update recording text: {}", e);
+                            }
+                        } else {
+                            let duration_secs = audio_data.len() as f32 / 16000.0;
+                            if let Err(e) = history.save_recording(
+                                &audio_data,
+                                &final_text,
+                                duration_secs,
+                                &mode,
+                                &config_clone.whisper.language,
+                            ) {
+                                error!("[MAIN] Failed to save recording to history: {}", e);
+                            }
                         }
                     }
 

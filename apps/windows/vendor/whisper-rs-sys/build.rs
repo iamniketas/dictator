@@ -188,6 +188,11 @@ fn main() {
         // On MSVC this flag can break CUDA compiler/toolkit detection.
         if !cfg!(target_os = "windows") {
             config.define("CMAKE_CUDA_FLAGS", "-Xcompiler=-fPIC");
+        } else {
+            // CUDA 13.x CCCL headers (#error C1189) require MSVC's conforming
+            // preprocessor; without /Zc:preprocessor the ggml-cuda kernels fail
+            // to compile with cl.exe's traditional preprocessor.
+            config.define("CMAKE_CUDA_FLAGS", "-Xcompiler=/Zc:preprocessor");
         }
     }
 

@@ -140,6 +140,105 @@ impl HistoryManager {
         })
     }
 
+    /// Prepare a pending recording entry without writing the audio yet.
+    ///
+    /// Creates the dated directories and writes a placeholder transcript +
+    /// metadata, returning the handle (id + paths). The WAV itself is written
+    /// separately via [`write_audio`], typically on a background thread, so the
+    /// audio lands on disk in parallel with transcription instead of after it.
+    /// This guarantees the captured audio is recoverable even if transcription
+    /// hangs or the process is killed before producing any text.
+    pub fn prepare_pending_recording(
+        &self,
+        duration_secs: f32,
+        mode: &str,
+        language: &str,
+    ) -> Result<Recording> {
+        let id = Self::generate_id();
+        let today = self.today_subdir();
+        let today_audio_dir = self.audio_dir.join(&today);
+        let today_transcripts_dir = self.transcripts_dir.join(&today);
+        fs::create_dir_all(&today_audio_dir)?;
+        fs::create_dir_all(&today_transcripts_dir)?;
+
+        let audio_path = today_audio_dir.join(format!("{}.wav", id));
+        let text_path = today_transcripts_dir.join(format!("{}.txt", id));
+        let meta_path = today_transcripts_dir.join(format!("{}.json", id));
+
+        let placeholder = "[Transcribing…]";
+        Self::write_atomic_text(&text_path, placeholder)?;
+
+        let metadata = RecordingMetadata {
+            timestamp: id.parse().unwrap_or(0),
+            datetime: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+            duration_secs,
+            mode: mode.to_string(),
+            language: language.to_string(),
+            text_preview: placeholder.to_string(),
+        };
+        let meta_json = serde_json::to_string_pretty(&metadata)?;
+        Self::write_atomic_text(&meta_path, &meta_json)?;
+
+        info!(
+            "[HISTORY] Prepared pending recording {} ({:.1}s), audio pending at {:?}",
+            id, duration_secs, audio_path
+        );
+
+        Ok(Recording {
+            id,
+            metadata,
+            audio_path,
+            text_path,
+            meta_path,
+        })
+    }
+
+    /// Write the WAV audio for a previously prepared recording. Safe to call
+    /// from a background thread (only touches the recording's own audio file).
+    pub fn write_audio(&self, recording: &Recording, audio_data: &[f32]) -> Result<()> {
+        self.save_wav(audio_data, &recording.audio_path)?;
+        info!(
+            "[HISTORY] Saved audio: {:?} ({:.1}s)",
+            recording.audio_path, recording.metadata.duration_secs
+        );
+        Ok(())
+    }
+
+    /// Update the transcript text + metadata of an existing recording in place,
+    /// keeping the same id and audio file. Used to fill in the final text once
+    /// transcription completes (or an error string if it failed).
+    pub fn update_recording_text(
+        &self,
+        recording: &Recording,
+        text: &str,
+        mode: &str,
+    ) -> Result<()> {
+        Self::write_atomic_text(&recording.text_path, text)?;
+
+        let text_preview = text
+            .chars()
+            .take(100)
+            .collect::<String>()
+            .replace('\n', " ");
+        let mut metadata = recording.metadata.clone();
+        metadata.mode = mode.to_string();
+        metadata.text_preview = text_preview;
+        let meta_json = serde_json::to_string_pretty(&metadata)?;
+        Self::write_atomic_text(&recording.meta_path, &meta_json)?;
+
+        info!(
+            "[HISTORY] Updated recording {} text ({} chars)",
+            recording.id,
+            text.len()
+        );
+
+        if let Err(e) = self.cleanup_old_recordings() {
+            warn!("[HISTORY] Cleanup failed: {}", e);
+        }
+
+        Ok(())
+    }
+
     /// Save audio data as WAV file (16-bit PCM, 16kHz, mono)
     fn save_wav(&self, audio_data: &[f32], path: &Path) -> Result<()> {
         let spec = hound::WavSpec {

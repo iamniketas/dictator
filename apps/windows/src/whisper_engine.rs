@@ -41,9 +41,16 @@ impl WhisperEngine {
             #[cfg(feature = "cuda")]
             {
                 p.use_gpu(use_gpu);
+                if use_gpu {
+                    // Flash attention: notably faster GPU inference and lower VRAM
+                    // for large models. We don't use DTW token timestamps, so its
+                    // incompatibility with flash attention does not apply.
+                    p.flash_attn(true);
+                }
                 info!(
-                    "[ENGINE] CUDA mode: {}",
-                    if use_gpu { "GPU" } else { "CPU-only" }
+                    "[ENGINE] CUDA mode: {}{}",
+                    if use_gpu { "GPU" } else { "CPU-only" },
+                    if use_gpu { " (flash attention on)" } else { "" }
                 );
             }
             #[cfg(not(feature = "cuda"))]
@@ -115,14 +122,21 @@ impl WhisperEngine {
         params.set_suppress_blank(true);
         params.set_suppress_nst(true);
 
-        if matches!(profile, DecodeProfile::Safe) {
-            // For long dictation, this profile prioritizes stability over minimal latency.
-            params.set_no_context(true);
-            params.set_temperature(0.0);
-            params.set_temperature_inc(0.2);
-            params.set_entropy_thold(2.4);
-            params.set_logprob_thold(-1.0);
-        }
+        // Anti-hallucination guards applied to BOTH profiles. whisper.cpp's
+        // defaults already enable temperature fallback (temperature_inc=0.2) and
+        // the entropy/logprob thresholds; the decisive addition here is
+        // `no_context`. Without it, a decoder repetition loop in one 30s window
+        // is carried into the prompt of the next window and amplifies itself
+        // across the whole recording — the exact failure mode behind long-form
+        // "repeated phrase + trailing subtitle-credit" hallucinations on
+        // large-v3. Disabling cross-window context is a no-op for clips under
+        // 30s (a single window) and only trades a little cross-boundary
+        // coherence for loop resistance on long dictation.
+        params.set_no_context(true);
+        params.set_temperature(0.0);
+        params.set_temperature_inc(0.2);
+        params.set_entropy_thold(2.4);
+        params.set_logprob_thold(-1.0);
 
         state
             .full(params, audio)
